@@ -1,0 +1,24 @@
+[package]
+name = "remote_render"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]] # Bin to run the HelloWorld gRPC server
+name = "remote_render-server"
+path = "src/server.rs"
+
+[[bin]] # Bin to run the HelloWorld gRPC client
+name = "remote_render-client"
+path = "src/client.rs"
+
+[dependencies]
+chrono = "0.4"
+rdev = "0.5"
+tonic = "0.12"
+prost = "0.13"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tokio-stream = "0.1.15"
+h2 = "0.4.5"
+
+[build-dependencies]
+tonic-build = "0.12"
