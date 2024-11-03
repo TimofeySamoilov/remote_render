@@ -42,6 +42,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let string2 = Arc::clone(&string1);
     let f = tokio::spawn(keyboard(string1));
     let cl = streaming_data(&mut client, 1000000, string2).await;
-    tokio::time::sleep(Duration::from_millis(16)).await;
+    tokio::time::sleep(Duration::from_millis(2)).await;
     Ok(())
 }
