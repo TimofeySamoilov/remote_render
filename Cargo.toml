@@ -19,15 +19,23 @@ path = "src/render.rs"
 name = "remote_render-testplugin"
 path = "src/testplugin.rs"
 
+[[bin]]
+name = "headless_render"
+path = "src/headless_render.rs"
+
 [dependencies]
+#my_plugin = { path = "src/testplugin.rs" }
 bevy = "0.14.2"
 chrono = "0.4"
 rdev = "0.5"
 tonic = "0.12"
 prost = "0.13"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.41.0", features = ["macros", "rt-multi-thread"] }
 tokio-stream = "0.1.15"
 h2 = "0.4.5"
+crossbeam-channel = "0.5"
+
+
 
 [build-dependencies]
 tonic-build = "0.12"
