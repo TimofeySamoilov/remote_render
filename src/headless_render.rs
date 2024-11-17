@@ -91,7 +91,7 @@ pub struct MyPlugin {
 impl MyPlugin {
     pub fn send(&self) {
         self.runtime.spawn(async {
-            while (1 == 1) {
+            loop {
                 println!("hiii");
             }
         });
@@ -107,6 +107,7 @@ pub async fn start_server() -> Result<(), Box<dyn Error>> {
     println!("server");
     Ok(())
 }
+
 impl Plugin for MyPlugin {
     fn build(&self, app: &mut App) {
         self.runtime.spawn(async move {
@@ -155,7 +156,7 @@ fn main() {
     let config = AppConfig {
         width: 1920,
         height: 1080,
-        single_image: true,
+        single_image: false,
     };
 
     // setup frame capture
@@ -250,16 +251,28 @@ fn setup(
     // Scene example for non black box picture
     // circular base
     commands.spawn(PbrBundle {
-        mesh: meshes.add(Circle::new(4.0)),
+        mesh: meshes.add(Circle::new(2.0)),
         material: materials.add(Color::WHITE),
         transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         ..default()
     });
     // cube
     commands.spawn(PbrBundle {
-        mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        material: materials.add(Color::srgb_u8(124, 144, 255)),
+        mesh: meshes.add(Cuboid::new(2.0, 1.0, 1.0)),
+        material: materials.add(Color::srgb_u8(76, 0, 153)),
         transform: Transform::from_xyz(0.0, 0.5, 0.0),
+        ..default()
+    });
+    commands.spawn(PbrBundle {
+        mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        material: materials.add(Color::srgb_u8(40, 84, 25)),
+        transform: Transform::from_xyz(0.0, 1.5, 0.0),
+        ..default()
+    });
+    commands.spawn(PbrBundle {
+        mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        material: materials.add(Color::srgb_u8(120, 45, 50)),
+        transform: Transform::from_xyz(0.0, 0.5, 1.0),
         ..default()
     });
     // light

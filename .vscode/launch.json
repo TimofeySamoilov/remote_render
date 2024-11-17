@@ -1,0 +1,190 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'headless_render'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=headless_render",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "headless_render",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'headless_render'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=headless_render",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "headless_render",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'remote_render-client'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=remote_render-client",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-client",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'remote_render-client'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=remote_render-client",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-client",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'remote_render-render'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=remote_render-render",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-render",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'remote_render-render'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=remote_render-render",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-render",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'remote_render-server'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=remote_render-server",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-server",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'remote_render-server'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=remote_render-server",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-server",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'remote_render-testplugin'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=remote_render-testplugin",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-testplugin",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'remote_render-testplugin'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=remote_render-testplugin",
+                    "--package=remote_render"
+                ],
+                "filter": {
+                    "name": "remote_render-testplugin",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}
