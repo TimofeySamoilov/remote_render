@@ -57,7 +57,7 @@ impl eframe::App for ScreenApp {
             while let Ok(data) = self.receiver.try_recv() {
                 self.pixels.copy_from_slice(&data);
             }
-            // Создание текстуры из пикселей
+            // making texture from pixels
             let image = egui::ColorImage::from_rgba_unmultiplied([self.screen_length, self.screen_height], &self.pixels);
             let texture = ctx.load_texture("my_texture", image, TextureOptions::default());
             ui.image(&texture);
@@ -66,7 +66,7 @@ impl eframe::App for ScreenApp {
     }  
 }
 
-//Client's part
+// client's part
 async fn streaming_data(client: &mut GreeterClient<Channel>, num: usize, pressed_key: Arc<Mutex<String>>, sender: mpsc::Sender<Vec<u8>>) {
     let stream = client.say_hello( HelloRequest { message: "client connected".to_string()}).await.unwrap().into_inner();
     let mut stream = stream.take(num);
@@ -76,7 +76,7 @@ async fn streaming_data(client: &mut GreeterClient<Channel>, num: usize, pressed
     }
 }
 
-//Function are monitoring keyboard buttons
+// function are monitoring keyboard buttons
 async fn keyboard(shared_string: Arc<Mutex<String>>) {
     listen (move |event| {
         match event.event_type {
