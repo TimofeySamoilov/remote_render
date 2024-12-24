@@ -78,19 +78,14 @@ impl eframe::App for ScreenApp {
                 self.pixels.copy_from_slice(&data);
             }
             // making texture from pixels
-<<<<<<< HEAD
             let image = egui::ColorImage::from_rgba_unmultiplied(
                 [self.screen_length, self.screen_height],
                 &self.pixels,
             );
-=======
-            let image = egui::ColorImage::from_rgba_unmultiplied([self.screen_length, self.screen_height], &self.pixels);
->>>>>>> da0db4ca294c9ae6fca9ef7d83f024e9ab44c294
             let texture = ctx.load_texture("my_texture", image, TextureOptions::default());
             ui.image(&texture);
             ctx.request_repaint();
         });
-<<<<<<< HEAD
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let _ = self.stop_sender.try_send(true);
@@ -133,24 +128,6 @@ async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Re
             return;
         }
 
-=======
-    }  
-}
-
-// client's part
-async fn streaming_data(client: &mut GreeterClient<Channel>, num: usize, pressed_key: Arc<Mutex<String>>, sender: mpsc::Sender<Vec<u8>>) {
-    let stream = client.say_hello( HelloRequest { message: "client connected".to_string()}).await.unwrap().into_inner();
-    let mut stream = stream.take(num);
-    while let Some(item) = stream.next().await {
-        let _ = sender.send(item.unwrap().message.to_vec()).await;
-        client.say_hello( HelloRequest { message: format!("{:?}", pressed_key.lock()).to_string()}).await.unwrap().into_inner();
-    }
-}
-
-// function are monitoring keyboard buttons
-async fn keyboard(shared_string: Arc<Mutex<String>>) {
-    listen (move |event| {
->>>>>>> da0db4ca294c9ae6fca9ef7d83f024e9ab44c294
         match event.event_type {
             EventType::KeyPress(key) => {
                 let mut s = shared_string.lock().unwrap();
@@ -167,10 +144,6 @@ async fn keyboard(shared_string: Arc<Mutex<String>>) {
                 *s = "No one is pressed".to_string();
             }
         }
-<<<<<<< HEAD
     })
     .unwrap();
-=======
-    }).unwrap();
->>>>>>> da0db4ca294c9ae6fca9ef7d83f024e9ab44c294
 }
