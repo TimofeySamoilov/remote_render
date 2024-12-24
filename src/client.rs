@@ -89,6 +89,7 @@ impl eframe::App for ScreenApp {
     }
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         let _ = self.stop_sender.try_send(true);
+        std::process::exit(0);
     }
 }
 
