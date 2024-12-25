@@ -47,8 +47,14 @@ impl Default for ScreenApp {
                     let pressed_key_clone = Arc::clone(&pressed_key);
 
                     let _keyboard_check = tokio::spawn(keyboard(pressed_key, stop_rx));
-                    let _communication =
-                        streaming_data(&mut client, 100000000, pressed_key_clone, shared_tx, stop_rx_clone).await;
+                    let _communication = streaming_data(
+                        &mut client,
+                        100000000,
+                        pressed_key_clone,
+                        shared_tx,
+                        stop_rx_clone,
+                    )
+                    .await;
 
                     Ok::<(), crate::egui::Key>(())
                 }
@@ -111,7 +117,8 @@ async fn streaming_data(
     let mut stream = stream.take(num);
     while let Some(item) = stream.next().await {
         let _ = sender.send(item.unwrap().message.to_vec()).await;
-        client.say_hello(HelloRequest {
+        client
+            .say_hello(HelloRequest {
                 message: format!("{:?}", pressed_key.lock()).to_string(),
             })
             .await
@@ -123,7 +130,6 @@ async fn streaming_data(
 // function monitoring keyboard buttons
 async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Receiver<bool>>>) {
     listen(move |event| {
-        
         while let Ok(data) = stop_rx.lock().unwrap().try_recv() {
             println!("Keyboard is closed");
             return;
@@ -133,7 +139,7 @@ async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Re
             EventType::KeyPress(key) => {
                 let mut s = shared_string.lock().unwrap();
                 *s = format!("{:?}", key);
-                
+
                 //println!("{s}");
                 /*if key == rdev::Key::Escape {
                     println!("Process is over");

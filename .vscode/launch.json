@@ -78,52 +78,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'remote_render-render'",
+            "name": "Debug executable 'remote_render-server_plugin'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=remote_render-render",
+                    "--bin=remote_render-server_plugin",
                     "--package=remote_render"
                 ],
                 "filter": {
-                    "name": "remote_render-render",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug unit tests in executable 'remote_render-render'",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--bin=remote_render-render",
-                    "--package=remote_render"
-                ],
-                "filter": {
-                    "name": "remote_render-render",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug executable 'remote_render-server'",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=remote_render-server",
-                    "--package=remote_render"
-                ],
-                "filter": {
-                    "name": "remote_render-server",
+                    "name": "remote_render-server_plugin",
                     "kind": "bin"
                 }
             },
@@ -138,48 +101,11 @@
                 "args": [
                     "test",
                     "--no-run",
-                    "--bin=remote_render-server",
+                    "--bin=remote_render-server_plugin",
                     "--package=remote_render"
                 ],
                 "filter": {
-                    "name": "remote_render-server",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug executable 'remote_render-testplugin'",
-            "cargo": {
-                "args": [
-                    "build",
-                    "--bin=remote_render-testplugin",
-                    "--package=remote_render"
-                ],
-                "filter": {
-                    "name": "remote_render-testplugin",
-                    "kind": "bin"
-                }
-            },
-            "args": [],
-            "cwd": "${workspaceFolder}"
-        },
-        {
-            "type": "lldb",
-            "request": "launch",
-            "name": "Debug unit tests in executable 'remote_render-testplugin'",
-            "cargo": {
-                "args": [
-                    "test",
-                    "--no-run",
-                    "--bin=remote_render-testplugin",
-                    "--package=remote_render"
-                ],
-                "filter": {
-                    "name": "remote_render-testplugin",
+                    "name": "remote_render-server_plugin",
                     "kind": "bin"
                 }
             },

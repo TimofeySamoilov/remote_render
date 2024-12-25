@@ -27,10 +27,14 @@ use bevy::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::{
-    ops::{Deref, DerefMut}, path::PathBuf, sync::{
+    ops::{Deref, DerefMut},
+    path::PathBuf,
+    sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    }, thread::sleep, time::Duration
+    },
+    thread::sleep,
+    time::Duration,
 };
 // To communicate between the main world and the render world we need a channel.
 // Since the main world and render world run in parallel, there will always be a frame of latency
@@ -74,7 +78,10 @@ fn main() {
             config.single_image,
         ))
         .insert_resource(ClearColor(Color::srgb_u8(0, 0, 0)))
-        .insert_resource(SleepTime {sleep_for: 10, latest_time: chrono::Utc::now().timestamp_subsec_millis() as i64})
+        .insert_resource(SleepTime {
+            sleep_for: 10,
+            latest_time: chrono::Utc::now().timestamp_subsec_millis() as i64,
+        })
         .add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
@@ -496,10 +503,13 @@ fn update(
     mut scene_controller: ResMut<SceneController>,
     mut app_exit_writer: EventWriter<AppExit>,
     mut file_number: Local<u32>,
-    mut sleep_time: ResMut<SleepTime>
+    mut sleep_time: ResMut<SleepTime>,
 ) {
     if let SceneState::Render(n) = scene_controller.state {
-        if n < 1 && (sleep_time.latest_time + sleep_time.sleep_for <= chrono::Utc::now().timestamp_millis()) {
+        if n < 1
+            && (sleep_time.latest_time + sleep_time.sleep_for
+                <= chrono::Utc::now().timestamp_millis())
+        {
             sleep_time.latest_time = chrono::Utc::now().timestamp_millis();
             // We don't want to block the main world on this,
             // so we use try_recv which attempts to receive without blocking
@@ -558,7 +568,7 @@ fn update(
                     app_exit_writer.send(AppExit::Success);
                 }
             }
-        } else if n > 0{
+        } else if n > 0 {
             // clears channel for skipped frames
             while receiver.try_recv().is_ok() {}
             scene_controller.state = SceneState::Render(n - 1);
