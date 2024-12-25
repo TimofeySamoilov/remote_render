@@ -27,101 +27,11 @@ use bevy::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use std::{
-    ops::{Deref, DerefMut},
-    path::PathBuf,
-    sync::{
+    ops::{Deref, DerefMut}, path::PathBuf, sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    },
-    time::Duration,
+    }, thread::sleep, time::Duration
 };
-
-//use chrono::prelude::*;
-use remote_render::greeter_server::{Greeter, GreeterServer};
-use remote_render::{HelloReply, HelloRequest};
-use std::{error::Error, pin::Pin}; //time::Duration};
-use tokio::runtime::Runtime;
-use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, Stream};
-use tonic::{transport::Server, Request, Response, Status};
-//server
-pub mod remote_render {
-    tonic::include_proto!("remote_render");
-}
-
-#[derive(Debug, Default)]
-pub struct MyGreeter {}
-
-#[tonic::async_trait]
-impl Greeter for MyGreeter {
-    type SayHelloStream = Pin<Box<dyn Stream<Item = Result<HelloReply, Status>> + Send>>;
-    async fn say_hello(
-        &self,
-        request: Request<HelloRequest>,
-    ) -> Result<Response<Self::SayHelloStream>, Status> {
-        println!("{:?}", request.into_inner().message);
-
-        let (tx, rx) = mpsc::channel(128);
-
-        tokio::spawn(async move {
-            // Создаем бесконечный цикл
-            while let Ok(_) = tx
-                .send(Result::<_, Status>::Ok(HelloReply {
-                    message: chrono::prelude::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                }))
-                .await
-            {
-                // Ждем 16 миллисекунд перед отправкой следующего сообщения
-                tokio::time::sleep(Duration::from_millis(16)).await;
-            }
-        });
-
-        let output_stream = ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(output_stream) as Self::SayHelloStream
-        ))
-    }
-}
-
-//plugin
-pub struct MyPlugin {
-    runtime: Runtime,
-}
-
-impl MyPlugin {
-    pub fn send(&self) {
-        self.runtime.spawn(async {
-            loop {
-                println!("hiii");
-            }
-        });
-    }
-}
-pub async fn start_server() -> Result<(), Box<dyn Error>> {
-    let addr = "[::1]:50051".parse()?;
-    let greeter = MyGreeter {};
-    Server::builder()
-        .add_service(GreeterServer::new(greeter))
-        .serve(addr)
-        .await?;
-    println!("server");
-    Ok(())
-}
-
-impl Plugin for MyPlugin {
-    fn build(&self, app: &mut App) {
-        self.runtime.spawn(async move {
-            match start_server().await {
-                Err(e) => {println!("error{:?}", e)},
-                _ => {println!("Ok!")},
-            }
-        });
-    }
-}
-
-
-
-
 // To communicate between the main world and the render world we need a channel.
 // Since the main world and render world run in parallel, there will always be a frame of latency
 // between the data sent from the render world and the data received in the main world
@@ -150,9 +60,6 @@ struct AppConfig {
 }
 
 fn main() {
-    let async_plugin = MyPlugin {
-        runtime: Runtime::new().expect("msg"),
-    };
     let config = AppConfig {
         width: 1920,
         height: 1080,
@@ -167,6 +74,7 @@ fn main() {
             config.single_image,
         ))
         .insert_resource(ClearColor(Color::srgb_u8(0, 0, 0)))
+        .insert_resource(SleepTime {sleep_for: 10, latest_time: chrono::Utc::now().timestamp_subsec_millis() as i64})
         .add_plugins(
             DefaultPlugins
                 .set(ImagePlugin::default_nearest())
@@ -184,8 +92,8 @@ fn main() {
             // Run 60 times per second.
             Duration::from_secs_f64(1.0 / 60.0),
         ))
-        .add_plugins(async_plugin)
         .init_resource::<SceneController>()
+        //.insert_resource(SleepTime {sleep_for: 12, latest_time: chrono::Utc::now().timestamp_millis() as u32})
         .add_systems(Startup, setup)
         .run();
 }
@@ -574,6 +482,12 @@ fn receive_image_from_buffer(
 #[derive(Component, Deref, DerefMut)]
 struct ImageToSave(Handle<Image>);
 
+#[derive(Resource)]
+struct SleepTime {
+    sleep_for: i64,
+    latest_time: i64,
+}
+
 // Takes from channel image content sent from render world and saves it to disk
 fn update(
     images_to_save: Query<&ImageToSave>,
@@ -582,9 +496,11 @@ fn update(
     mut scene_controller: ResMut<SceneController>,
     mut app_exit_writer: EventWriter<AppExit>,
     mut file_number: Local<u32>,
+    mut sleep_time: ResMut<SleepTime>
 ) {
     if let SceneState::Render(n) = scene_controller.state {
-        if n < 1 {
+        if n < 1 && (sleep_time.latest_time + sleep_time.sleep_for <= chrono::Utc::now().timestamp_millis()) {
+            sleep_time.latest_time = chrono::Utc::now().timestamp_millis();
             // We don't want to block the main world on this,
             // so we use try_recv which attempts to receive without blocking
             let mut image_data = Vec::new();
@@ -642,7 +558,7 @@ fn update(
                     app_exit_writer.send(AppExit::Success);
                 }
             }
-        } else {
+        } else if n > 0{
             // clears channel for skipped frames
             while receiver.try_recv().is_ok() {}
             scene_controller.state = SceneState::Render(n - 1);
