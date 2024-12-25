@@ -96,7 +96,7 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug unit tests in executable 'remote_render-server'",
+            "name": "Debug unit tests in executable 'remote_render-server_plugin'",
             "cargo": {
                 "args": [
                     "test",
