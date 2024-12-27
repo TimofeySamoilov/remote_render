@@ -78,7 +78,6 @@ impl Default for ScreenApp {
 impl eframe::App for ScreenApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.heading("SuperWindow");
             // copy data from receiver channel
             while let Ok(data) = self.receiver.try_recv() {
                 self.pixels.copy_from_slice(&data);
