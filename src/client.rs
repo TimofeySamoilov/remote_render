@@ -34,7 +34,7 @@ async fn main() -> eframe::Result<()> {
 // default() has an async fn, which is connecting to server
 impl Default for ScreenApp {
     fn default() -> Self {
-        let shared_pixels: Vec<u8> = vec![0; 500 * 500 * 4];
+        let shared_pixels: Vec<u8> = vec![0; 900 * 900 * 4];
         let (tx, rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel(1);
         let shared_tx = tx.clone(); // clone sender for use in the async block
         let (stop_tx, stop_rx): (mpsc::Sender<bool>, mpsc::Receiver<bool>) = mpsc::channel(1);
@@ -66,8 +66,8 @@ impl Default for ScreenApp {
         });
         // making ScreenApp
         ScreenApp {
-            screen_length: 500,
-            screen_height: 500,
+            screen_length: 900,
+            screen_height: 900,
             pixels: shared_pixels,
             receiver: rx,
             stop_sender: stop_tx,

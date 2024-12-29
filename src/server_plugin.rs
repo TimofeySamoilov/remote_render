@@ -21,8 +21,17 @@ pub mod remote_render {
     tonic::include_proto!("remote_render");
 }
 
-#[derive(Debug, Default)]
-pub struct MyGreeter {}
+#[derive(Debug)]
+pub struct MyGreeter {
+    frame_receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+}
+impl MyGreeter {
+    pub fn new(receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>) -> Self {
+        MyGreeter {
+            frame_receiver: receiver,
+        }
+    }
+}
 
 #[tonic::async_trait]
 impl Greeter for MyGreeter {
@@ -35,10 +44,15 @@ impl Greeter for MyGreeter {
         println!("{:?}", request.into_inner().message);
 
         let (tx, rx) = mpsc::channel(128);
-
+        let receiver_clone = self.frame_receiver.clone();
         tokio::spawn(async move {
-            let mut a: u8 = 0;
-            let mut screen = vec![0; 500 * 500 * 4];
+            let mut screen = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize * 4];
+            let data = receiver_clone.lock().unwrap().try_recv();
+            //println!("{:?}", data);
+            match data {
+                Ok(_) => {screen = data.expect("msg")},
+                _ => {},
+            }
             // communication with client
             while let Ok(_) = tx
                 .send(Result::<_, Status>::Ok(HelloReply {
@@ -47,7 +61,7 @@ impl Greeter for MyGreeter {
                 .await
             {
                 tokio::time::sleep(Duration::from_millis(64)).await;
-                a = (a + 1) % 3;
+                /*a = (a + 1) % 3;
                 let save = set_color(a);
                 for x in 0..500 {
                     for y in 0..500 {
@@ -59,7 +73,7 @@ impl Greeter for MyGreeter {
                         (screen[index], screen[index + 1], screen[index + 2]) = save;
                         screen[index + 3] = 128;
                     }
-                }
+                }*/
             }
         });
 
@@ -71,9 +85,9 @@ impl Greeter for MyGreeter {
 }
 
 // function, which starts sever
-async fn start_server() -> Result<(), Box<dyn Error>> {
+async fn start_server(receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>) -> Result<(), Box<dyn Error>> {
     let addr = "[::1]:50051".parse()?;
-    let greeter = MyGreeter {};
+    let greeter = MyGreeter::new(receiver);
     Server::builder()
         .add_service(GreeterServer::new(greeter))
         .serve(addr)
@@ -82,9 +96,10 @@ async fn start_server() -> Result<(), Box<dyn Error>> {
 }
 
 // system, which uses start_server()
-fn server_system(runtime: ResMut<TokioTasksRuntime>) {
+fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Communication>) {
+    let mut receiver_clone = communication.receiver.clone();
     runtime.spawn_background_task(|_ctx| async move {
-        match start_server().await {
+        match start_server(receiver_clone).await {
             Ok(_) => {
                 println!("Server started...");
             }
@@ -104,6 +119,7 @@ fn main() {
         .add_systems(Startup, window_setup)
         .add_systems(Startup, scene_setup)
         .add_systems(Update, update)
+        .add_systems(PostUpdate, take_screenshot_system)
         .insert_resource(Communication::default())
         .run();
 }
@@ -156,11 +172,7 @@ fn scene_setup(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut mat
 fn update(
     time: Res<Time>,
     mut query: Query<&mut Transform, With<Ball>>,
-    mut screenshot_manager: ResMut<ScreenshotManager>,
-    window_query: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut communication: ResMut<Communication>,
 ) {
-    let window_entity = window_query.single().0;
     for mut transform in query.iter_mut() {
         let delta_time = time.delta_seconds();
         let move_amount = unsafe { BALL_SPEED } * delta_time;
@@ -179,18 +191,22 @@ fn update(
             unsafe { BALL_SPEED *= -1.0; }
         }
     }
+}
+fn take_screenshot_system(
+    mut screenshot_manager: ResMut<ScreenshotManager>,
+    window_query: Query<(Entity, &Window), With<PrimaryWindow>>,
+    mut communication: ResMut<Communication>
+) {
+    let window_entity = window_query.single().0;
     let sender_clone = communication.sender.clone();
     match screenshot_manager.take_screenshot(window_entity, move |image: Image| {
-        let width = image.width();
-        let height = image.height();
         let pixels = image.data;
-
         if let Ok(mut sender) = sender_clone.lock() {
             let _ = sender.try_send(pixels);
         }
-
     }) {
-        Ok(_) => { println!("Ok Screenshot") }
+        Ok(_) => {}//println!("Ok Screenshot") }
         Err(e) => {println!("Failed to create a screenshot: {:?}", e)}
     }
+
 }
