@@ -133,17 +133,10 @@ async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Re
             println!("Keyboard is closed");
             return;
         }
-
         match event.event_type {
             EventType::KeyPress(key) => {
                 let mut s = shared_string.lock().unwrap();
                 *s = format!("{:?}", key);
-
-                //println!("{s}");
-                /*if key == rdev::Key::Escape {
-                    println!("Process is over");
-                    std::process::exit(0);
-                }*/
             }
             _ => {
                 let mut s = shared_string.lock().unwrap();

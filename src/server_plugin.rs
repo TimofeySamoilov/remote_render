@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_tokio_tasks::*;
+use chrono::Utc;
 use remote_render::greeter_server::{Greeter, GreeterServer};
 use remote_render::{HelloReply, HelloRequest};
 use std::{error::Error, pin::Pin, time::Duration};
@@ -12,6 +13,7 @@ use bevy::prelude::Circle;
 use bevy::render::{view::screenshot::ScreenshotManager};
 use bevy::sprite::MaterialMesh2dBundle;
 use bevy::window::{Window, PrimaryWindow, WindowMode};
+
 // this is bevy render with grpc-server
 // uses special plugin: bevy_tokio_tasks
 // which can allow using (tokio async + bevy app)
@@ -46,34 +48,35 @@ impl Greeter for MyGreeter {
         let (tx, rx) = mpsc::channel(128);
         let receiver_clone = self.frame_receiver.clone();
         tokio::spawn(async move {
-            let mut screen = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize * 4];
-            let data = receiver_clone.lock().unwrap().try_recv();
-            //println!("{:?}", data);
-            match data {
-                Ok(_) => {screen = data.expect("msg")},
-                _ => {},
-            }
             // communication with client
-            while let Ok(_) = tx
-                .send(Result::<_, Status>::Ok(HelloReply {
-                    message: screen.clone(),
-                }))
-                .await
-            {
-                tokio::time::sleep(Duration::from_millis(64)).await;
-                /*a = (a + 1) % 3;
-                let save = set_color(a);
-                for x in 0..500 {
-                    for y in 0..500 {
-                        let index = (y * 500 + x) * 4;
-                        if x == y || x + y == 500 - 1 {
-                            (screen[index], screen[index + 1], screen[index + 2]) = (255, 255, 255);
-                            continue;
-                        }
-                        (screen[index], screen[index + 1], screen[index + 2]) = save;
-                        screen[index + 3] = 128;
-                    }
-                }*/
+            loop {
+                let mut screen = vec![0; SCREEN_WIDTH as usize * SCREEN_HEIGHT as usize * 4];
+                let data = receiver_clone.lock().unwrap().try_recv();
+                
+                match data {
+                    Ok(frame) => {
+                        screen = frame;
+                         //println!("{:?} received data length", screen.len());
+                     } ,
+                    Err(_) => {
+                        //println!("failed to deal with data");
+                        tokio::time::sleep(Duration::from_millis(2)).await; // Try again soon
+                        continue;
+                    },
+                }
+
+                if tx
+                    .send(Result::<_, Status>::Ok(HelloReply {
+                        message: screen.clone(),
+                    }))
+                    .await
+                    .is_err()
+                {
+                    // Client disconnected
+                    break;
+                }
+
+                // tokio::time::sleep(Duration::from_millis(64)).await;
             }
         });
 
@@ -124,15 +127,6 @@ fn main() {
         .run();
 }
 
-// this function return different colors
-fn set_color(a: u8) -> (u8, u8, u8) {
-    match a {
-        0 => (255, 0, 0),
-        1 => (0, 255, 0),
-        _ => (0, 0, 255),
-    }
-}
-
 const SCREEN_WIDTH: f32 = 900.0;
 const SCREEN_HEIGHT: f32 = 900.0;
 const BALL_RADIUS: f32 = 50.0;
@@ -144,12 +138,12 @@ struct Ball;
 #[derive(Resource)]
 struct Communication {
     receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
-    sender: Arc<Mutex<mpsc::Sender<Vec<u8>>>>
+    sender: mpsc::Sender<Vec<u8>>
 }
 impl Default for Communication {
     fn default() -> Self {
-        let (sender_rx, receiver_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel(1);
-        Communication {receiver: Arc::new(Mutex::new(receiver_rx)), sender: Arc::new(Mutex::new(sender_rx))}
+        let (sender_rx, receiver_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) = mpsc::channel(10000);
+        Communication {receiver: Arc::new(Mutex::new(receiver_rx)), sender: sender_rx}
     }
 }
 
@@ -195,18 +189,20 @@ fn update(
 fn take_screenshot_system(
     mut screenshot_manager: ResMut<ScreenshotManager>,
     window_query: Query<(Entity, &Window), With<PrimaryWindow>>,
-    mut communication: ResMut<Communication>
+    mut communication: ResMut<Communication>,
+    mut query: Query<&mut Transform, With<Ball>>,
+    //runtime: ResMut<TokioTasksRuntime>
 ) {
     let window_entity = window_query.single().0;
     let sender_clone = communication.sender.clone();
-    match screenshot_manager.take_screenshot(window_entity, move |image: Image| {
+    match screenshot_manager.take_screenshot(window_entity,  move |image: Image| {
         let pixels = image.data;
-        if let Ok(mut sender) = sender_clone.lock() {
-            let _ = sender.try_send(pixels);
+        match sender_clone.try_send(pixels) {
+            Ok(_) => {},
+            Err(e) => {println!("{:?}", e)}
         }
     }) {
-        Ok(_) => {}//println!("Ok Screenshot") }
+        Ok(_) => {}
         Err(e) => {println!("Failed to create a screenshot: {:?}", e)}
     }
-
 }
