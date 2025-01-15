@@ -2,13 +2,17 @@ syntax = "proto3";
 package remote_render;
 
 service Greeter {
-    rpc SayHello(HelloRequest) returns (stream HelloReply);
+    rpc SayHello(ControlRequest) returns (stream FrameDispatch);
 }
 
-message HelloRequest {
+service KeyBoard_Control {
+    rpc SayKeyboard(ControlRequest) returns (ControlRequest);
+}
+
+message ControlRequest {
    string message = 1;
 }
 
-message HelloReply {
+message FrameDispatch {
     bytes message = 1;
 }
