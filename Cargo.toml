@@ -25,6 +25,9 @@ crossbeam-channel = "0.5"
 bevy-tokio-tasks = "0.14.0"
 rand = "0.8.5"
 
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
 
 
 [build-dependencies]

@@ -10,11 +10,9 @@ use std::{
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
-
 pub mod remote_render {
     tonic::include_proto!("remote_render");
 }
-
 struct ScreenApp {
     screen_length: usize,
     screen_height: usize,
@@ -60,7 +58,7 @@ impl Default for ScreenApp {
         });
 
         tokio::spawn(async move {
-            match KeyBoardControlClient::connect("http://[::1]:50052").await {
+            match KeyBoardControlClient::connect("http://[::1]:50051").await {
                 Ok(mut client) => {
                     let pressed_key = Arc::new(Mutex::new(String::from("")));
                     let pressed_key_clone = Arc::clone(&pressed_key);
@@ -136,8 +134,19 @@ async fn streaming_data(
         .unwrap()
         .into_inner();
 
+    let frames = Arc::new(Mutex::new(0u64));
+    let frames_clone = frames.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            println!("Client FRAMES: {}", frames_clone.lock().unwrap());
+            *frames_clone.lock().unwrap() = 0;
+        }
+    });
     while let Some(item) = stream.next().await {
         let _ = sender.send(item.unwrap().message.to_vec()).await;
+        let mut frames_guard = frames.lock().unwrap();
+        *frames_guard += 1;
     }
 }
 
