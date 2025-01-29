@@ -40,7 +40,9 @@ pub mod remote_render {
     tonic::include_proto!("remote_render");
 }
 
-use tracing::{info, span, Level};
+use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing::{span, Level};
+use tracing_subscriber::fmt;
 
 /// This will receive asynchronously any data sent from the render world
 #[derive(Resource, Deref)]
@@ -56,27 +58,25 @@ struct AppConfig {
     height: u32,
     single_image: bool,
 }
-fn test() {
-    let span = span!(Level::INFO, "process_request", request_id = 0);
-    let _guard = span.enter();
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    info!("Processing...");
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
-    info!("Request completed");
-}
 fn main() {
-    std::env::set_var("WGPU_BACKEND", "vulkan");
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-    test();
+    let filter = match std::env::var("RUST_LOG") {
+        Ok(val) => {
+            println!("RUST_LOG: {}", val);
+            EnvFilter::try_new(val).expect("failed to parse RUST_LOG")
+        }
+        Err(_) => {
+            println!("RUST_LOG is not set, using default filter");
+            EnvFilter::try_new("remote_render=trace").expect("failed to parse filter")
+        }
+    };
+    tracing_subscriber::registry().with(fmt::layer()).with(filter).init();
+
     let config = AppConfig {
         width: 900,
         height: 900,
         single_image: false,
     };
-
     // setup frame capture
     App::new()
         .insert_resource(SceneController::new(
@@ -112,33 +112,41 @@ fn main() {
         .run();
 }
 
+enum ChannelMessage {
+    Pixels(Vec<u8>),
+    PixelsAndFrame(Vec<u8>, u32)
+}
+
+
 // server part
 #[derive(Resource)]
 struct Communication {
-    receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
-    sender: mpsc::Sender<Vec<u8>>,
+    receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
+    sender: mpsc::Sender<ChannelMessage>,
     client_connected: Arc<Mutex<bool>>,
+    frame_number: Arc<Mutex<u32>>
 }
 impl Default for Communication {
     fn default() -> Self {
-        let (sender_rx, receiver_rx): (mpsc::Sender<Vec<u8>>, mpsc::Receiver<Vec<u8>>) =
+        let (sender_rx, receiver_rx): (mpsc::Sender<ChannelMessage>, mpsc::Receiver<ChannelMessage>) =
             mpsc::channel(10000);
         Communication {
             receiver: Arc::new(Mutex::new(receiver_rx)),
             sender: sender_rx,
             client_connected: Arc::new(Mutex::new(false)),
+            frame_number: Arc::new(Mutex::new(0))
         }
     }
 }
 
 #[derive(Debug)]
-pub struct RenderService {
-    frame_receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+struct RenderService {
+    frame_receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
     client_connected: Arc<Mutex<bool>>,
 }
 impl RenderService {
     pub fn new(
-        receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+        receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
         client_connected: Arc<Mutex<bool>>,
     ) -> Self {
         RenderService {
@@ -182,41 +190,46 @@ impl Greeter for RenderService {
         let (tx, rx) = mpsc::channel(128);
         let receiver_clone = self.frame_receiver.clone();
 
-        let frames = Arc::new(Mutex::new(0u64));
-        let frames_clone = frames.clone();
         tokio::spawn(async move {
             // communication with client
-            let frames_print_clone = frames_clone.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    println!("FRAMES: {}", frames_print_clone.lock().unwrap());
-                    *frames_print_clone.lock().unwrap() = 0;
-                }
-            });
             loop {
                 let screen: Vec<u8>;
                 let data = receiver_clone.lock().unwrap().try_recv();
 
+                /*let current_span = tracing::Span::current();
+                let context_id = current_span.id().unwrap();
+                trace!("current id: {}", context_id.into_u64());*/
+                let mut frame: u32 = 0;
+                
                 match data {
-                    Ok(frame) => {
-                        screen = frame;
+                    Ok(channel_message) => {
+                        match channel_message {
+                            ChannelMessage::PixelsAndFrame(pixels, id) => {
+                                screen = pixels;
+                                frame = id;
+                            }
+                            _ => {
+                                tokio::time::sleep(Duration::from_millis(1)).await; // Try again soon
+                                continue;
+                            }
+                        }
                     }
                     Err(_) => {
                         tokio::time::sleep(Duration::from_millis(1)).await; // Try again soon
                         continue;
                     }
                 }
-
+                let span = span!(Level::TRACE, "frame", n = frame);
+                let _enter = span.enter();
                 match tx.try_send(Result::<_, Status>::Ok(FrameDispatch {
                     message: screen.clone(),
+                    frame: frame
                 })) {
                     Ok(_) => {
-                        let mut frames = frames_clone.lock().unwrap();
-                        *frames += 1;
+                        trace!("frame sent to client");
                     }
                     Err(e) => {
-                        println!("frame skipped, {:?}", e);
+                        trace!("frame was skipped! {:?}", e);
                     }
                 }
             }
@@ -231,7 +244,7 @@ impl Greeter for RenderService {
 
 // function, which starts sever
 async fn start_server(
-    receiver: Arc<Mutex<mpsc::Receiver<Vec<u8>>>>,
+    receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
     client_connected: Arc<Mutex<bool>>,
 ) -> Result<(), Box<dyn Error>> {
     let greeter_addr = "[::1]:50051".parse()?;
@@ -258,10 +271,10 @@ fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Commu
     runtime.spawn_background_task(|_ctx| async move {
         match start_server(receiver_clone, client_connected).await {
             Ok(_) => {
-                println!("Server started...")
+                info!("Server started...")
             }
             Err(e) => {
-                eprintln!("Error with starting server: {:?}", e);
+                error!("Error with starting server: {:?}", e);
             }
         }
     });
@@ -276,7 +289,6 @@ struct SceneController {
     width: u32,
     height: u32,
     single_image: bool,
-    _frame_counter: u64,
 }
 
 impl SceneController {
@@ -287,7 +299,6 @@ impl SceneController {
             width,
             height,
             single_image,
-            _frame_counter: 0,
         }
     }
 }
@@ -476,7 +487,6 @@ fn setup_render_target(
 pub struct CaptureFramePlugin;
 impl Plugin for CaptureFramePlugin {
     fn build(&self, app: &mut App) {
-        info!("Adding CaptureFramePlugin");
         app.add_systems(PostUpdate, update);
     }
 }
@@ -727,17 +737,24 @@ fn update(
                     let client_connected = communication.client_connected.clone();
                     let sender_clone = communication.sender.clone();
                     if *client_connected.lock().unwrap() {
-                        match sender_clone.try_send(rgba_pixels) {
-                            Ok(_) => {}
+
+                        let frames = communication.frame_number.clone();
+                        let mut frame_number = frames.lock().unwrap();
+                        *frame_number = (*frame_number + 1) % 1000;
+
+                        let frame = span!(Level::TRACE, "frame", n = *frame_number);
+                        let _enter = frame.enter();
+                        
+                        trace!("Was received from main world");
+
+                        match sender_clone.try_send(ChannelMessage::PixelsAndFrame(rgba_pixels, *frame_number)) {
+                            Ok(_) => {trace!("Was sended from update to server")}
                             Err(e) => {
                                 println!("error with sending {:?}", e)
                             }
                         }
                     }
 
-                    /*if let Err(e) = img.save(image_path) {
-                        panic!("Failed to save image: {}", e);
-                    };*/
                 }
                 if scene_controller.single_image {
                     app_exit_writer.send(AppExit::Success);

@@ -865,7 +865,7 @@ dependencies = [
  "bevy_app",
  "bevy_ecs",
  "bevy_utils",
- "tracing-log",
+ "tracing-log 0.2.0",
  "tracing-subscriber",
  "tracing-wasm",
 ]
@@ -4172,6 +4172,7 @@ dependencies = [
  "crossbeam-channel",
  "eframe",
  "h2",
+ "log",
  "prost",
  "rand",
  "rdev",
@@ -4180,6 +4181,7 @@ dependencies = [
  "tonic",
  "tonic-build",
  "tracing",
+ "tracing-log 0.1.4",
  "tracing-subscriber",
 ]
 
@@ -4785,6 +4787,17 @@ dependencies = [
 
 [[package]]
 name = "tracing-log"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f751112709b4e791d8ce53e32c4ed2d353565a795ce84da2285393f41557bdf2"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
@@ -4809,7 +4822,7 @@ dependencies = [
  "thread_local",
  "tracing",
  "tracing-core",
- "tracing-log",
+ "tracing-log 0.2.0",
 ]
 
 [[package]]

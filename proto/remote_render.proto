@@ -15,4 +15,5 @@ message ControlRequest {
 
 message FrameDispatch {
     bytes message = 1;
+    uint32 frame = 2;
 }
