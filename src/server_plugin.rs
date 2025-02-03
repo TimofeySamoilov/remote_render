@@ -24,7 +24,6 @@ use std::{
     },
     time::Duration,
 };
-
 use bevy::prelude::Circle;
 use bevy_tokio_tasks::*;
 use remote_render::greeter_server::{Greeter, GreeterServer};
@@ -35,6 +34,10 @@ use std::{error::Error, pin::Pin};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
 use tonic::{transport::Server, Request, Response, Status};
+
+use lz4::{EncoderBuilder, Decoder};
+use std::io::{Write, Read};
+
 
 pub mod remote_render {
     tonic::include_proto!("remote_render");
@@ -124,7 +127,8 @@ struct Communication {
     receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
     sender: mpsc::Sender<ChannelMessage>,
     client_connected: Arc<Mutex<bool>>,
-    frame_number: Arc<Mutex<u32>>
+    frame_number: Arc<Mutex<u32>>,
+    lz4_compression: bool
 }
 impl Default for Communication {
     fn default() -> Self {
@@ -134,7 +138,8 @@ impl Default for Communication {
             receiver: Arc::new(Mutex::new(receiver_rx)),
             sender: sender_rx,
             client_connected: Arc::new(Mutex::new(false)),
-            frame_number: Arc::new(Mutex::new(0))
+            frame_number: Arc::new(Mutex::new(0)),
+            lz4_compression: true
         }
     }
 }
@@ -747,7 +752,22 @@ fn update(
                         
                         trace!("Was received from main world");
 
-                        match sender_clone.try_send(ChannelMessage::PixelsAndFrame(rgba_pixels, *frame_number)) {
+                        let mut frame_to_send: Vec<u8> = vec![];
+                        if communication.lz4_compression {
+                            match encode_image_lz4(&rgba_pixels) {
+                                Ok(value) => {
+                                    frame_to_send = value;
+                                },
+                                Err(e) => {
+                                    trace!("Error with lz4!");
+                                    return;
+                                }
+                            }
+                        }
+                        else {
+                            frame_to_send = rgba_pixels;
+                        }
+                        match sender_clone.try_send(ChannelMessage::PixelsAndFrame(frame_to_send, *frame_number)) {
                             Ok(_) => {trace!("Was sended from update to server")}
                             Err(e) => {
                                 println!("error with sending {:?}", e)
@@ -766,4 +786,21 @@ fn update(
             scene_controller.state = SceneState::Render(n - 1);
         }
     }
+}
+
+fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let mut compressed_data = Vec::new(); // Create a Vec to hold the compressed data
+    trace!("START___");
+    // Create the encoder, using the Vec as the writer.  This is KEY.
+    let mut encoder = EncoderBuilder::new()
+        .level(0)
+        .build(&mut compressed_data)?;
+
+    // Write the image data to the encoder. Now it works because 'encoder' implements Write.
+    let _ = encoder.write_all(image_data)?;
+
+    // Finish the encoder (no need for extra read_to_end). The compressed data is already in `compressed_data`.
+    let _ = encoder.finish();
+    trace!("END___");
+    Ok(compressed_data)
 }

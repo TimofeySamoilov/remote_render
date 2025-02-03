@@ -24,7 +24,7 @@ h2 = "0.4.5"
 crossbeam-channel = "0.5"
 bevy-tokio-tasks = "0.14.0"
 rand = "0.8.5"
-
+lz4 = "1.2"
 
 log = "0.4"
 tracing-log = "0.1"

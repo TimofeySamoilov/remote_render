@@ -18,6 +18,9 @@ use tracing_subscriber::{filter::EnvFilter, layer::SubscriberExt, util::Subscrib
 use tracing::{span, Level, trace};
 use tracing_subscriber::fmt;
 
+use lz4::Decoder;
+use std::io::Read;
+use std::error::Error;
 struct ScreenApp {
     screen_length: usize,
     screen_height: usize,
@@ -26,7 +29,7 @@ struct ScreenApp {
     stop_sender: mpsc::Sender<bool>,
     texture: Option<TextureHandle>,
     ctx: egui::Context,
-
+    lz4_compression: bool
 }
 enum ChannelMessage {
     Pixels(Vec<u8>),
@@ -65,11 +68,31 @@ impl ScreenApp {
         let (stop_tx, stop_rx): (mpsc::Sender<bool>, mpsc::Receiver<bool>) = mpsc::channel(1);
         let stop_rx = Arc::new(Mutex::new(stop_rx));
         let stop_rx_clone = Arc::clone(&stop_rx);
+
+        let texture = {
+            let image = ColorImage::from_rgba_unmultiplied(
+                 [900, 900],
+                &shared_pixels,
+            );
+            ctx.load_texture("my_texture", image, TextureOptions::default())
+        };
+
+        let config = ScreenApp {
+            screen_length: 900,
+            screen_height: 900,
+            pixels: shared_pixels,
+            receiver: rx,
+            stop_sender: stop_tx,
+            texture: Some(texture),
+            ctx: ctx,
+            lz4_compression: true
+        };
+        
         tokio::spawn(async move {
             match GreeterClient::connect("http://[::1]:50051").await {
                 Ok(mut client) => {
                     let _communication =
-                        streaming_data(&mut client, shared_tx, stop_rx_clone).await;
+                        streaming_data(&mut client, shared_tx, stop_rx_clone, config.lz4_compression).await;
 
                     Ok::<(), crate::egui::Key>(())
                 }
@@ -109,23 +132,8 @@ impl ScreenApp {
                 }
             }
         });
-        let texture = {
-            let image = ColorImage::from_rgba_unmultiplied(
-                 [900, 900],
-                &shared_pixels,
-            );
-            ctx.load_texture("my_texture", image, TextureOptions::default())
-        };
         // making ScreenApp
-        ScreenApp {
-            screen_length: 900,
-            screen_height: 900,
-            pixels: shared_pixels,
-            receiver: rx,
-            stop_sender: stop_tx,
-            texture: Some(texture),
-            ctx: ctx
-        }
+        config
     }
 }
 
@@ -177,6 +185,7 @@ async fn streaming_data(
     client: &mut GreeterClient<Channel>,
     sender: mpsc::Sender<ChannelMessage>,
     _stop_rx: Arc<Mutex<mpsc::Receiver<bool>>>,
+    lz4_indicator: bool
 ) {
     let mut stream = client
         .say_hello(ControlRequest {
@@ -191,7 +200,14 @@ async fn streaming_data(
         let span = span!(Level::TRACE, "frame", n = data.frame);
         let _enter = span.enter();
         trace!("received a frame by server");
-        match sender.try_send(ChannelMessage::PixelsAndFrame(data.message.to_vec(), data.frame)) {
+        let mut to_send: Vec<u8> = vec![];
+        if lz4_indicator {
+            to_send = decode_image_lz4(&data.message).expect("msg").to_vec();
+        }
+        else {
+            to_send = data.message;
+        }
+        match sender.try_send(ChannelMessage::PixelsAndFrame(to_send, data.frame)) {
             Ok(_) => {trace!("frame sent to egui")},
             Err(e) => {trace!("error with sending to egui! {:?}", e)}
         };
@@ -217,4 +233,11 @@ async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Re
         }
     })
     .unwrap();
+}
+
+fn decode_image_lz4(compressed_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> { // Added Error type
+    let mut decoder = Decoder::new(compressed_data)?;
+    let mut decompressed_data = Vec::new();
+    decoder.read_to_end(&mut decompressed_data)?;
+    Ok(decompressed_data)
 }
