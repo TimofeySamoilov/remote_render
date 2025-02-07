@@ -111,6 +111,7 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Startup, server_system)
         .add_systems(Update, scene_update)
+        .add_systems(Update, movement)
         .add_systems(PostUpdate, update)
         .run();
 }
@@ -128,7 +129,8 @@ struct Communication {
     sender: mpsc::Sender<ChannelMessage>,
     client_connected: Arc<Mutex<bool>>,
     frame_number: Arc<Mutex<u32>>,
-    lz4_compression: bool
+    lz4_compression: bool,
+    pressed_key: Arc<Mutex<u8>>
 }
 impl Default for Communication {
     fn default() -> Self {
@@ -139,10 +141,12 @@ impl Default for Communication {
             sender: sender_rx,
             client_connected: Arc::new(Mutex::new(false)),
             frame_number: Arc::new(Mutex::new(0)),
-            lz4_compression: true
+            lz4_compression: true,
+            pressed_key: Arc::new(Mutex::new(0u8))
         }
     }
 }
+
 
 #[derive(Debug)]
 struct RenderService {
@@ -160,10 +164,14 @@ impl RenderService {
         }
     }
 }
-pub struct KeyBoardButtons {}
+pub struct KeyBoardButtons {
+    pressed_key: Arc<Mutex<u8>>
+}
 impl KeyBoardButtons {
-    pub fn new() -> Self {
-        KeyBoardButtons {}
+    pub fn new(key: Arc<Mutex<u8>>) -> Self {
+        KeyBoardButtons {
+            pressed_key: key
+        }
     }
 }
 
@@ -173,13 +181,24 @@ impl KeyBoardControl for KeyBoardButtons {
         &self,
         request: Request<ControlRequest>,
     ) -> Result<Response<ControlRequest>, Status> {
-        let _message = request.into_inner().message;
-        //println!("Received from client: {:?}", message);
-
+        let message = request.into_inner().message;
+        let mut key = self.pressed_key.lock().unwrap();
+        *key = compare_key(message);
         Ok(Response::new(ControlRequest {
             message: "OK".to_string(),
         }))
     }
+}
+fn compare_key(s: String) -> u8 {
+    if s == "KeyA" { return 1; }
+    if s == "KeyW" { return 2; }
+    if s == "KeyD" { return 3; }
+    if s == "KeyS" { return 4; }
+    if s == "KeyQ" { return 5; }
+    if s == "KeyE" { return 6; }
+    if s == "Space" { return 7; }
+    if s == "ControlLeft" { return 8; }
+    return 0;
 }
 
 #[tonic::async_trait]
@@ -200,12 +219,7 @@ impl Greeter for RenderService {
             loop {
                 let screen: Vec<u8>;
                 let data = receiver_clone.lock().unwrap().try_recv();
-
-                /*let current_span = tracing::Span::current();
-                let context_id = current_span.id().unwrap();
-                trace!("current id: {}", context_id.into_u64());*/
                 let mut frame: u32 = 0;
-                
                 match data {
                     Ok(channel_message) => {
                         match channel_message {
@@ -251,11 +265,11 @@ impl Greeter for RenderService {
 async fn start_server(
     receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
     client_connected: Arc<Mutex<bool>>,
+    pressed_key: Arc<Mutex<u8>>
 ) -> Result<(), Box<dyn Error>> {
     let greeter_addr = "[::1]:50051".parse()?;
-
     let greeter = RenderService::new(receiver, client_connected);
-    let keyboard = KeyBoardButtons::new();
+    let keyboard = KeyBoardButtons::new(pressed_key);
 
     tokio::spawn(async move {
         Server::builder()
@@ -265,7 +279,6 @@ async fn start_server(
             .await
             .expect("Greeter server error");
     });
-
     Ok(())
 }
 
@@ -273,8 +286,9 @@ async fn start_server(
 fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Communication>) {
     let receiver_clone = communication.receiver.clone();
     let client_connected = communication.client_connected.clone();
+    let pressed_key = communication.pressed_key.clone();
     runtime.spawn_background_task(|_ctx| async move {
-        match start_server(receiver_clone, client_connected).await {
+        match start_server(receiver_clone, client_connected, pressed_key).await {
             Ok(_) => {
                 info!("Server started...")
             }
@@ -285,7 +299,6 @@ fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Commu
     });
 }
 // end of server part
-
 /// Capture image settings and state
 #[derive(Debug, Default, Resource)]
 struct SceneController {
@@ -320,6 +333,28 @@ enum SceneState {
 
 #[derive(Component)]
 struct Cube;
+
+#[derive(Component)]
+struct CameraSettings {
+    position: Vec3,
+    look_at: Vec3,
+    up: Vec3,
+    speed: f32 // Camera movement speed
+}
+
+impl Default for CameraSettings {
+    fn default() -> Self {
+        CameraSettings {
+            position: Vec3::new(-2.5, 4.5, 9.0),
+            look_at: Vec3::ZERO,
+            up: Vec3::Y,
+            speed: 5.0
+        }
+    }
+}
+
+#[derive(Component)]
+struct MainCamera; // Marker component for the main camera
 
 fn setup(
     mut commands: Commands,
@@ -374,40 +409,80 @@ fn setup(
         transform: Transform::from_xyz(4.0, 8.0, 4.0),
         ..default()
     });
-
-    commands.spawn(Camera3dBundle {
-        transform: Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, Vec3::Y),
-        tonemapping: Tonemapping::None,
-        camera: Camera {
-            // render to image
-            target: render_target,
+    let camera_settings = CameraSettings::default();
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_translation(camera_settings.position)
+                .looking_at(camera_settings.look_at, camera_settings.up),
+            tonemapping: Tonemapping::None,
+            camera: Camera {
+                target: render_target,
+                ..default()
+            },
             ..default()
         },
-        ..default()
-    });
+        camera_settings,
+        MainCamera,
+    ));
 }
-
+fn movement(
+    mut cam_query: Query<(&mut Transform, &CameraSettings), With<MainCamera>>,
+    communication: Res<Communication>,
+    time: Res<Time>
+) {
+    let pressed_key = *communication.pressed_key.lock().unwrap();
+    
+    if let Ok((mut camera, settings)) = cam_query.get_single_mut() {
+        let speed = settings.speed * time.delta_seconds();
+        match pressed_key {
+            1 => {
+                let left = camera.left();
+                camera.translation += left * speed;
+            }
+            2 => {
+                let forward = camera.forward();
+                camera.translation += forward * speed;
+            }
+            3 => {
+                let right = camera.right();
+                camera.translation += right * speed;
+            }
+            4 => {
+                let backward = camera.back();
+                camera.translation += backward * speed;
+            }
+            5 => {
+                camera.rotate_y(speed / 5.0);
+            }
+            6 => {
+                camera.rotate_y(-speed / 5.0);
+            }
+            7 => {
+                let up = camera.up();
+                camera.translation += up * speed;
+            }
+            8 => {
+                let down = camera.down();
+                camera.translation += down * speed;
+            }
+            _ => {}
+        }
+    }
+}
 fn scene_update(
     mut cube_query: Query<&mut Transform, With<Cube>>,
-    mut timer: Local<f32>,
     time: Res<Time>,
 ) {
-    *timer += time.delta_seconds();
-
+    // Move the cube 
     for mut transform in cube_query.iter_mut() {
-        let move_distance = 3.0; // Adjust for pixel based movement
+        let move_distance = 3.0;
         let move_speed = 0.5;
+        let cycle_time = 2.0;
+        let relative_time = time.elapsed_seconds() * move_speed % cycle_time;
 
-        let cycle_time = 2.0; // Total time of cycle(left and back to start)
-
-        let relative_time = timer.mul_add(move_speed, 0.0) % cycle_time;
-
-        // Move to left during first part of cycle
         if relative_time < cycle_time / 2.0 {
             transform.translation.x = move_distance * (relative_time - cycle_time / 4.0);
-        }
-        // Move to right and back to center
-        else {
+        } else {
             transform.translation.x =
                 move_distance * (cycle_time / 4.0 - (relative_time - cycle_time / 2.0));
         }
@@ -578,10 +653,6 @@ impl render_graph::Node for ImageCopyDriver {
             let block_dimensions = src_image.texture_format.block_dimensions();
             let block_size = src_image.texture_format.block_copy_size(None).unwrap();
 
-            // Calculating correct size of image row because
-            // copy_texture_to_buffer can copy image only by rows aligned wgpu::COPY_BYTES_PER_ROW_ALIGNMENT
-            // That's why image in buffer can be little bit wider
-            // This should be taken into account at copy from buffer stage
             let padded_bytes_per_row = RenderDevice::align_copy_bytes_per_row(
                 (src_image.size.x as usize / block_dimensions.0 as usize) * block_size as usize,
             );
@@ -633,28 +704,6 @@ fn receive_image_from_buffer(
         // can't access yet).
         // We want the whole thing so use unbounded range.
         let buffer_slice = image_copier.buffer.slice(..);
-
-        // Now things get complicated. WebGPU, for safety reasons, only allows either the GPU
-        // or CPU to access a buffer's contents at a time. We need to "map" the buffer which means
-        // flipping ownership of the buffer over to the CPU and making access legal. We do this
-        // with `BufferSlice::map_async`.
-        //
-        // The problem is that map_async is not an async function so we can't await it. What
-        // we need to do instead is pass in a closure that will be executed when the slice is
-        // either mapped or the mapping has failed.
-        //
-        // The problem with this is that we don't have a reliable way to wait in the main
-        // code for the buffer to be mapped and even worse, calling get_mapped_range or
-        // get_mapped_range_mut prematurely will cause a panic, not return an error.
-        //
-        // Using channels solves this as awaiting the receiving of a message from
-        // the passed closure will force the outside code to wait. It also doesn't hurt
-        // if the closure finishes before the outside code catches up as the message is
-        // buffered and receiving will just pick that up.
-        //
-        // It may also be worth noting that although on native, the usage of asynchronous
-        // channels is wholly unnecessary, for the sake of portability to WASM
-        // we'll use async channels that work on both native and WASM.
 
         let (s, r) = crossbeam_channel::bounded(1);
 
@@ -759,7 +808,7 @@ fn update(
                                     frame_to_send = value;
                                 },
                                 Err(e) => {
-                                    trace!("Error with lz4!");
+                                    trace!("Error with lz4!, {:?}", e);
                                     return;
                                 }
                             }
@@ -790,10 +839,9 @@ fn update(
 
 fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut compressed_data = Vec::new(); // Create a Vec to hold the compressed data
-    trace!("START___");
     // Create the encoder, using the Vec as the writer.  This is KEY.
     let mut encoder = EncoderBuilder::new()
-        .level(0)
+        .level(5)
         .build(&mut compressed_data)?;
 
     // Write the image data to the encoder. Now it works because 'encoder' implements Write.
@@ -801,6 +849,5 @@ fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Er
 
     // Finish the encoder (no need for extra read_to_end). The compressed data is already in `compressed_data`.
     let _ = encoder.finish();
-    trace!("END___");
     Ok(compressed_data)
 }

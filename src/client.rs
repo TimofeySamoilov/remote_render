@@ -1,3 +1,4 @@
+use bevy::input::keyboard::Key;
 use eframe::egui::{self, TextureOptions, TextureHandle, ColorImage};
 use rdev::{listen, EventType};
 use remote_render::greeter_client::GreeterClient;
@@ -6,6 +7,7 @@ use remote_render::ControlRequest;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
+    mem
 };
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -97,7 +99,7 @@ impl ScreenApp {
                     Ok::<(), crate::egui::Key>(())
                 }
                 Err(e) => {
-                    eprintln!("Error connecting to server: {}", e);
+                    println!("Error connecting to server: {}", e);
                     Err(crate::egui::Key::A) // return a default error
                 }
             }
@@ -124,7 +126,7 @@ impl ScreenApp {
                             }
                         }
 
-                        tokio::time::sleep(Duration::from_millis(8)).await;
+                        tokio::time::sleep(Duration::from_millis(2)).await;
                     }
                 }
                 Err(e) => {
@@ -137,46 +139,43 @@ impl ScreenApp {
     }
 }
 
+impl ScreenApp {
+    fn update_texture(&mut self, pixels: &[u8]) {
+        if let Some(texture) = &mut self.texture {
+            let image = ColorImage::from_rgba_unmultiplied(
+                [self.screen_length, self.screen_height],
+                pixels,
+            );
+            *texture = self.ctx.load_texture("my_texture", image, TextureOptions::default());
+        }
+    }
+}
+
 impl eframe::App for ScreenApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
-            // copy data from receiver channel
             let mut frame: u32 = 0;
             if let Ok(data) = self.receiver.try_recv() {
                 match data {
                     ChannelMessage::PixelsAndFrame(pixels, id) => {
-                        self.pixels.copy_from_slice(&pixels);
+                        self.update_texture(&pixels);
                         frame = id;
-                        if let Some(_texture) = &mut self.texture {
-                            let image = ColorImage::from_rgba_unmultiplied(
-                                [self.screen_length, self.screen_height],
-                                &self.pixels,
-                            );
-                            self.texture = Some(self.ctx.load_texture("my_texture", image, TextureOptions::default()));
-                        }
                     }
-                    _ => {
-
-                    }
+                    _ => {}
                 }
             }
+
             if frame > 0 {
                 let span = span!(Level::TRACE, "frame", n = frame);
                 let _enter = span.enter();
                 trace!("frame printed");
             }
-            // making texture from pixels
-            // making texture from pixels
+
             if let Some(texture) = &self.texture {
                 ui.image(texture);
             }
-            
             ctx.request_repaint();
         });
-    }
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let _ = self.stop_sender.try_send(true);
-        std::process::exit(0);
     }
 }
 
