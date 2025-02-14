@@ -199,6 +199,7 @@ async fn streaming_data(
         let span = span!(Level::TRACE, "frame", n = data.frame);
         let _enter = span.enter();
         trace!("received a frame by server");
+
         let mut to_send: Vec<u8> = vec![];
         if lz4_indicator {
             to_send = decode_image_lz4(&data.message).expect("msg").to_vec();

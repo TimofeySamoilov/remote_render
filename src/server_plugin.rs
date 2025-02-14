@@ -113,6 +113,7 @@ fn main() {
         .add_systems(Update, scene_update)
         .add_systems(Update, movement)
         .add_systems(PostUpdate, update)
+        .add_systems(Update, extract_normals_system.after(update))
         .run();
 }
 
@@ -395,10 +396,14 @@ fn setup(
         PbrBundle {
             mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
             material: materials.add(Color::srgb_u8(124, 144, 255)),
-            transform: Transform::from_xyz(0.0, 0.5, 0.0),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.5, 0.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4), // Поворот на 45 градусов вокруг оси Y
+                scale: Vec3::new(1.0, 1.0, 1.0),
+            },
             ..default()
         },
-        Cube, // Add the Cube marker component
+        Cube, // Добавление маркера компонента Cube
     ));
     // light
     commands.spawn(PointLightBundle {
@@ -837,11 +842,29 @@ fn update(
     }
 }
 
+fn extract_normals_system(
+    query: Query<&Handle<Mesh>>,
+    meshes: Res<Assets<Mesh>>,
+) {
+    let mut all_normals = Vec::new();
+    for mesh_handle in query.iter() {
+        if let Some(mesh) = meshes.get(mesh_handle) {
+
+            if let Some(normals) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) {
+                if let Some(normals) = normals.as_float3() {
+                    all_normals.extend(normals.iter().cloned());
+                }
+            }
+        }
+    }
+    println!("{:?}", all_normals);
+}
+
 fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut compressed_data = Vec::new(); // Create a Vec to hold the compressed data
     // Create the encoder, using the Vec as the writer.  This is KEY.
     let mut encoder = EncoderBuilder::new()
-        .level(5)
+        .level(2)
         .build(&mut compressed_data)?;
 
     // Write the image data to the encoder. Now it works because 'encoder' implements Write.
