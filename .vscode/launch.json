@@ -26,11 +26,11 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=remote_render-server_plugin",
+                    "--bin=remote_render-server_main",
                     "--package=remote_render"
                 ],
                 "filter": {
-                    "name": "remote_render-server_plugin",
+                    "name": "remote_render-server_main",
                     "kind": "bin"
                 }
             },

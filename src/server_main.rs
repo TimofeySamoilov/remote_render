@@ -1,3 +1,5 @@
+mod server;
+use crate::server::{Communication, server_system, ChannelMessage};
 use bevy::{
     app::{AppExit, ScheduleRunnerPlugin},
     core_pipeline::tonemapping::Tonemapping,
@@ -25,19 +27,9 @@ use std::{
     time::Duration,
 };
 use bevy::prelude::Circle;
-use bevy_tokio_tasks::*;
-use remote_render::greeter_server::{Greeter, GreeterServer};
-use remote_render::key_board_control_server::{KeyBoardControl, KeyBoardControlServer};
-use remote_render::{ControlRequest, FrameDispatch};
-use std::sync::Mutex;
-use std::{error::Error, pin::Pin};
-use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, Stream};
-use tonic::{transport::Server, Request, Response, Status};
 
-use lz4::{EncoderBuilder, Decoder};
-use std::io::{Write, Read};
-
+use lz4::EncoderBuilder;
+use std::io::Write;
 
 pub mod remote_render {
     tonic::include_proto!("remote_render");
@@ -113,193 +105,10 @@ fn main() {
         .add_systems(Update, scene_update)
         .add_systems(Update, movement)
         .add_systems(PostUpdate, update)
-        .add_systems(Update, extract_normals_system.after(update))
+        //.add_systems(Update, extract_normals_system.after(update))
         .run();
 }
 
-enum ChannelMessage {
-    Pixels(Vec<u8>),
-    PixelsAndFrame(Vec<u8>, u32)
-}
-
-
-// server part
-#[derive(Resource)]
-struct Communication {
-    receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-    sender: mpsc::Sender<ChannelMessage>,
-    client_connected: Arc<Mutex<bool>>,
-    frame_number: Arc<Mutex<u32>>,
-    lz4_compression: bool,
-    pressed_key: Arc<Mutex<u8>>
-}
-impl Default for Communication {
-    fn default() -> Self {
-        let (sender_rx, receiver_rx): (mpsc::Sender<ChannelMessage>, mpsc::Receiver<ChannelMessage>) =
-            mpsc::channel(10000);
-        Communication {
-            receiver: Arc::new(Mutex::new(receiver_rx)),
-            sender: sender_rx,
-            client_connected: Arc::new(Mutex::new(false)),
-            frame_number: Arc::new(Mutex::new(0)),
-            lz4_compression: true,
-            pressed_key: Arc::new(Mutex::new(0u8))
-        }
-    }
-}
-
-
-#[derive(Debug)]
-struct RenderService {
-    frame_receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-    client_connected: Arc<Mutex<bool>>,
-}
-impl RenderService {
-    pub fn new(
-        receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-        client_connected: Arc<Mutex<bool>>,
-    ) -> Self {
-        RenderService {
-            frame_receiver: receiver,
-            client_connected: client_connected,
-        }
-    }
-}
-pub struct KeyBoardButtons {
-    pressed_key: Arc<Mutex<u8>>
-}
-impl KeyBoardButtons {
-    pub fn new(key: Arc<Mutex<u8>>) -> Self {
-        KeyBoardButtons {
-            pressed_key: key
-        }
-    }
-}
-
-#[tonic::async_trait]
-impl KeyBoardControl for KeyBoardButtons {
-    async fn say_keyboard(
-        &self,
-        request: Request<ControlRequest>,
-    ) -> Result<Response<ControlRequest>, Status> {
-        let message = request.into_inner().message;
-        let mut key = self.pressed_key.lock().unwrap();
-        *key = compare_key(message);
-        Ok(Response::new(ControlRequest {
-            message: "OK".to_string(),
-        }))
-    }
-}
-fn compare_key(s: String) -> u8 {
-    if s == "KeyA" { return 1; }
-    if s == "KeyW" { return 2; }
-    if s == "KeyD" { return 3; }
-    if s == "KeyS" { return 4; }
-    if s == "KeyQ" { return 5; }
-    if s == "KeyE" { return 6; }
-    if s == "Space" { return 7; }
-    if s == "ControlLeft" { return 8; }
-    return 0;
-}
-
-#[tonic::async_trait]
-impl Greeter for RenderService {
-    type SayHelloStream = Pin<Box<dyn Stream<Item = Result<FrameDispatch, Status>> + Send>>;
-    async fn say_hello(
-        &self,
-        request: Request<ControlRequest>,
-    ) -> Result<Response<Self::SayHelloStream>, Status> {
-        println!("{:?}", request.into_inner().message);
-        let mut client_connected = self.client_connected.lock().unwrap();
-        *client_connected = true;
-        let (tx, rx) = mpsc::channel(128);
-        let receiver_clone = self.frame_receiver.clone();
-
-        tokio::spawn(async move {
-            // communication with client
-            loop {
-                let screen: Vec<u8>;
-                let data = receiver_clone.lock().unwrap().try_recv();
-                let mut frame: u32 = 0;
-                match data {
-                    Ok(channel_message) => {
-                        match channel_message {
-                            ChannelMessage::PixelsAndFrame(pixels, id) => {
-                                screen = pixels;
-                                frame = id;
-                            }
-                            _ => {
-                                tokio::time::sleep(Duration::from_millis(1)).await; // Try again soon
-                                continue;
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        tokio::time::sleep(Duration::from_millis(1)).await; // Try again soon
-                        continue;
-                    }
-                }
-                let span = span!(Level::TRACE, "frame", n = frame);
-                let _enter = span.enter();
-                match tx.try_send(Result::<_, Status>::Ok(FrameDispatch {
-                    message: screen.clone(),
-                    frame: frame
-                })) {
-                    Ok(_) => {
-                        trace!("frame sent to client");
-                    }
-                    Err(e) => {
-                        trace!("frame was skipped! {:?}", e);
-                    }
-                }
-            }
-        });
-
-        let output_stream = ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(output_stream) as Self::SayHelloStream
-        ))
-    }
-}
-
-// function, which starts sever
-async fn start_server(
-    receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-    client_connected: Arc<Mutex<bool>>,
-    pressed_key: Arc<Mutex<u8>>
-) -> Result<(), Box<dyn Error>> {
-    let greeter_addr = "[::1]:50051".parse()?;
-    let greeter = RenderService::new(receiver, client_connected);
-    let keyboard = KeyBoardButtons::new(pressed_key);
-
-    tokio::spawn(async move {
-        Server::builder()
-            .add_service(GreeterServer::new(greeter))
-            .add_service(KeyBoardControlServer::new(keyboard))
-            .serve(greeter_addr)
-            .await
-            .expect("Greeter server error");
-    });
-    Ok(())
-}
-
-// system, which uses start_server()
-fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Communication>) {
-    let receiver_clone = communication.receiver.clone();
-    let client_connected = communication.client_connected.clone();
-    let pressed_key = communication.pressed_key.clone();
-    runtime.spawn_background_task(|_ctx| async move {
-        match start_server(receiver_clone, client_connected, pressed_key).await {
-            Ok(_) => {
-                info!("Server started...")
-            }
-            Err(e) => {
-                error!("Error with starting server: {:?}", e);
-            }
-        }
-    });
-}
-// end of server part
 /// Capture image settings and state
 #[derive(Debug, Default, Resource)]
 struct SceneController {
@@ -370,15 +179,6 @@ fn setup(
         &mut images,
         &render_device,
         &mut scene_controller,
-        // pre_roll_frames should be big enough for full scene render,
-        // but the bigger it is, the longer example will run.
-        // To visualize stages of scene rendering change this param to 0
-        // and change AppConfig::single_image to false in main
-        // Stages are:
-        // 1. Transparent image
-        // 2. Few black box images
-        // 3. Fully rendered scene images
-        // Exact number depends on device speed, device load and scene size
         40,
         "main_scene".into(),
     );
@@ -704,10 +504,6 @@ fn receive_image_from_buffer(
             continue;
         }
 
-        // Finally time to get our data back from the gpu.
-        // First we get a buffer slice which represents a chunk of the buffer (which we
-        // can't access yet).
-        // We want the whole thing so use unbounded range.
         let buffer_slice = image_copier.buffer.slice(..);
 
         let (s, r) = crossbeam_channel::bounded(1);
@@ -719,11 +515,6 @@ fn receive_image_from_buffer(
             Err(err) => panic!("Failed to map buffer {err}"),
         });
 
-        // In order for the mapping to be completed, one of three things must happen.
-        // One of those can be calling `Device::poll`. This isn't necessary on the web as devices
-        // are polled automatically but natively, we need to make sure this happens manually.
-        // `Maintain::Wait` will cause the thread to wait on native but not on WebGpu.
-
         // This blocks until the gpu is done executing everything
         render_device.poll(Maintain::wait()).panic_on_timeout();
 
@@ -732,10 +523,6 @@ fn receive_image_from_buffer(
 
         // This could fail on app exit, if Main world clears resources (including receiver) while Render world still renders
         let _ = sender.send(buffer_slice.get_mapped_range().to_vec());
-
-        // We need to make sure all `BufferView`'s are dropped before we do what we're about
-        // to do.
-        // Unmap so that we can copy to the staging buffer in the next iteration.
         image_copier.buffer.unmap();
     }
 }
@@ -842,7 +629,7 @@ fn update(
     }
 }
 
-fn extract_normals_system(
+/*fn extract_normals_system(
     query: Query<&Handle<Mesh>>,
     meshes: Res<Assets<Mesh>>,
 ) {
@@ -858,7 +645,7 @@ fn extract_normals_system(
         }
     }
     println!("{:?}", all_normals);
-}
+}*/
 
 fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let mut compressed_data = Vec::new(); // Create a Vec to hold the compressed data
