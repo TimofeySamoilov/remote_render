@@ -1,5 +1,6 @@
 use bevy::input::keyboard::Key;
 use eframe::egui::{self, TextureOptions, TextureHandle, ColorImage};
+use h2::client;
 use rdev::{listen, EventType};
 use remote_render::greeter_client::GreeterClient;
 use remote_render::key_board_control_client::KeyBoardControlClient;
@@ -23,6 +24,7 @@ use tracing_subscriber::fmt;
 use lz4::Decoder;
 use std::io::Read;
 use std::error::Error;
+
 struct ScreenApp {
     screen_length: usize,
     screen_height: usize,
@@ -89,12 +91,12 @@ impl ScreenApp {
             ctx: ctx,
             lz4_compression: true
         };
-        
+        let client_id = generate_id();
         tokio::spawn(async move {
             match GreeterClient::connect("http://[::1]:50051").await {
                 Ok(mut client) => {
                     let _communication =
-                        streaming_data(&mut client, shared_tx, stop_rx_clone, config.lz4_compression).await;
+                        streaming_data(&mut client, shared_tx, stop_rx_clone, config.lz4_compression, client_id).await;
 
                     Ok::<(), crate::egui::Key>(())
                 }
@@ -104,7 +106,6 @@ impl ScreenApp {
                 }
             }
         });
-
         tokio::spawn(async move {
             match KeyBoardControlClient::connect("http://[::1]:50051").await {
                 Ok(mut client) => {
@@ -117,6 +118,7 @@ impl ScreenApp {
                         match client
                             .say_keyboard(ControlRequest {
                                 message: key_clone.clone(),
+                                id: client_id,
                             })
                             .await
                         {
@@ -184,11 +186,14 @@ async fn streaming_data(
     client: &mut GreeterClient<Channel>,
     sender: mpsc::Sender<ChannelMessage>,
     _stop_rx: Arc<Mutex<mpsc::Receiver<bool>>>,
-    lz4_indicator: bool
+    lz4_indicator: bool,
+    client_id: u32,
 ) {
+    
     let mut stream = client
         .say_hello(ControlRequest {
-            message: "client connected".to_string(),
+            message: client_id.to_string(),
+            id: client_id,
         })
         .await
         .unwrap()
@@ -240,4 +245,8 @@ fn decode_image_lz4(compressed_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut decompressed_data = Vec::new();
     decoder.read_to_end(&mut decompressed_data)?;
     Ok(decompressed_data)
+}
+
+fn generate_id() -> u32 {
+    return (chrono::Utc::now().timestamp_millis() % 10000).try_into().unwrap();
 }

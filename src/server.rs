@@ -3,11 +3,11 @@ use bevy::{
 };
 use std::{
     sync::{
-
         Arc,
     },
     time::Duration,
 };
+//use std::collections::HashMap;
 
 use bevy_tokio_tasks::*;
 use remote_render::greeter_server::{Greeter, GreeterServer};
@@ -28,7 +28,7 @@ pub mod remote_render {
 pub struct Communication {
     pub receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
     pub sender: mpsc::Sender<ChannelMessage>,
-    pub client_connected: Arc<Mutex<bool>>,
+    pub clients: Arc<Mutex<Vec<u32>>>,
     pub frame_number: Arc<Mutex<u32>>,
     pub lz4_compression: bool,
     pub pressed_key: Arc<Mutex<u8>>
@@ -40,7 +40,7 @@ impl Default for Communication {
         Communication {
             receiver: Arc::new(Mutex::new(receiver_rx)),
             sender: sender_rx,
-            client_connected: Arc::new(Mutex::new(false)),
+            clients: Arc::new(Mutex::new(vec![])),
             frame_number: Arc::new(Mutex::new(0)),
             lz4_compression: true,
             pressed_key: Arc::new(Mutex::new(0u8))
@@ -50,16 +50,16 @@ impl Default for Communication {
 #[derive(Debug)]
 struct RenderService {
     frame_receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-    client_connected: Arc<Mutex<bool>>,
+    clients: Arc<Mutex<Vec<u32>>>,
 }
 impl RenderService {
     pub fn new(
         receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-        client_connected: Arc<Mutex<bool>>,
+        clients: Arc<Mutex<Vec<u32>>>,
     ) -> Self {
         RenderService {
             frame_receiver: receiver,
-            client_connected: client_connected,
+            clients: clients,
         }
     }
 }
@@ -84,11 +84,15 @@ impl KeyBoardControl for KeyBoardButtons {
         &self,
         request: Request<ControlRequest>,
     ) -> Result<Response<ControlRequest>, Status> {
-        let message = request.into_inner().message;
+        let request = request.into_inner();
+        let message = request.message;
+        let id = request.id;
+        println!("ID ID ID ID    {:?}", id);
         let mut key = self.pressed_key.lock().unwrap();
         *key = compare_key(message);
         Ok(Response::new(ControlRequest {
             message: "OK".to_string(),
+            id: 0,
         }))
     }
 }
@@ -110,12 +114,13 @@ impl Greeter for RenderService {
         &self,
         request: Request<ControlRequest>,
     ) -> Result<Response<Self::SayHelloStream>, Status> {
-        println!("{:?}", request.into_inner().message);
-        let mut client_connected = self.client_connected.lock().unwrap();
-        *client_connected = true;
+        
+        let mut clients = self.clients.lock().unwrap();
+        clients.push(request.into_inner().id);
+
         let (tx, rx) = mpsc::channel(128);
         let receiver_clone = self.frame_receiver.clone();
-
+        
         tokio::spawn(async move {
             // communication with client
             loop {
@@ -165,11 +170,11 @@ impl Greeter for RenderService {
 // function, which starts sever
 async fn start_server(
     receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-    client_connected: Arc<Mutex<bool>>,
+    clients: Arc<Mutex<Vec<u32>>>,
     pressed_key: Arc<Mutex<u8>>
 ) -> Result<(), Box<dyn Error>> {
     let greeter_addr = "[::1]:50051".parse()?;
-    let greeter = RenderService::new(receiver, client_connected);
+    let greeter = RenderService::new(receiver, clients);
     let keyboard = KeyBoardButtons::new(pressed_key);
 
     tokio::spawn(async move {
@@ -186,10 +191,10 @@ async fn start_server(
 // system, which uses start_server()
 pub fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Communication>) {
     let receiver_clone = communication.receiver.clone();
-    let client_connected = communication.client_connected.clone();
+    let clients = communication.clients.clone();
     let pressed_key = communication.pressed_key.clone();
     runtime.spawn_background_task(|_ctx| async move {
-        match start_server(receiver_clone, client_connected, pressed_key).await {
+        match start_server(receiver_clone, clients, pressed_key).await {
             Ok(_) => {
                 info!("Server started...")
             }

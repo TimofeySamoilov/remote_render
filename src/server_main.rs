@@ -580,10 +580,10 @@ fn update(
                     };
                     let rgba_pixels: Vec<u8> = img.into_raw();
 
-                    let client_connected = communication.client_connected.clone();
+                    let clients = communication.clients.clone();
                     let sender_clone = communication.sender.clone();
-                    if *client_connected.lock().unwrap() {
 
+                    if !clients.lock().unwrap().is_empty() {
                         let frames = communication.frame_number.clone();
                         let mut frame_number = frames.lock().unwrap();
                         *frame_number = (*frame_number + 1) % 1000;

@@ -11,6 +11,7 @@ service KeyBoard_Control {
 
 message ControlRequest {
    string message = 1;
+   uint32 id = 2;
 }
 
 message FrameDispatch {
