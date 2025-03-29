@@ -89,7 +89,7 @@ impl ScreenApp {
             stop_sender: stop_tx,
             texture: Some(texture),
             ctx: ctx,
-            lz4_compression: true
+            lz4_compression: false
         };
         let client_id = generate_id();
         tokio::spawn(async move {
@@ -240,7 +240,7 @@ async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Re
     .unwrap();
 }
 
-fn decode_image_lz4(compressed_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> { // Added Error type
+fn decode_image_lz4(compressed_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut decoder = Decoder::new(compressed_data)?;
     let mut decompressed_data = Vec::new();
     decoder.read_to_end(&mut decompressed_data)?;

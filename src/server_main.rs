@@ -1,5 +1,6 @@
 mod server;
 use crate::server::{Communication, server_system, ChannelMessage};
+use std::sync::Mutex;
 use bevy::{
     app::{AppExit, ScheduleRunnerPlugin},
     core_pipeline::tonemapping::Tonemapping,
@@ -103,10 +104,56 @@ fn main() {
         .add_systems(Startup, setup)
         .add_systems(Startup, server_system)
         .add_systems(Update, scene_update)
-        .add_systems(Update, movement)
+        //.add_systems(Update, movement)
         .add_systems(PostUpdate, update)
         //.add_systems(Update, extract_normals_system.after(update))
+        .add_systems(PostUpdate, check_cameras_data)
         .run();
+}
+
+fn check_cameras_data(
+    cameras: Res<Cameras>,
+) {
+    /*// Блокируем доступ к получателям
+    let receivers_guard = match cameras.receivers.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            eprintln!("Mutex poisoned, using recovered data");
+            poisoned.into_inner()
+        }
+    };
+
+    // Проверяем наличие хотя бы одной камеры
+    if receivers_guard.is_empty() {
+        println!("No cameras available");
+        return;
+    }
+
+    // Получаем первый receiver
+    let first_receiver = &receivers_guard[0];
+    
+    // Пытаемся получить данные без блокировки
+    match first_receiver.try_recv() {
+        Ok(data) => {
+            println!("First camera data size: {} bytes", data.len());
+            // Для вывода содержимого раскомментируйте:
+            // println!("Data: {:?}", data);
+        },
+        Err(crossbeam_channel::TryRecvError::Empty) => {
+            println!("First camera queue is empty");
+        },
+        Err(crossbeam_channel::TryRecvError::Disconnected) => {
+            println!("First camera channel disconnected");
+        }
+    }
+
+    // Дополнительно: проверяем размерность
+    let senders_guard = cameras.senders.lock().unwrap();
+    println!(
+        "Total cameras: {}, First camera sender status: {}",
+        senders_guard.len(),
+        if senders_guard[0].is_empty() { "inactive" } else { "active" }
+    );*/
 }
 
 /// Capture image settings and state
@@ -163,8 +210,25 @@ impl Default for CameraSettings {
     }
 }
 
-#[derive(Component)]
-struct MainCamera; // Marker component for the main camera
+const NUM_CAMERAS: usize = 4;
+#[derive(Resource, Clone)]
+pub struct Cameras {
+    cameras: Arc<Mutex<Vec<Entity>>>,
+    receivers: Arc<Mutex<Vec<Receiver<Vec<u8>>>>>,
+    senders: Arc<Mutex<Vec<Sender<Vec<u8>>>>>,
+}
+impl Default for Cameras {
+    fn default() -> Self {
+        let mut cameras = Arc::new(Mutex::new(Vec::new()));
+        let mut receivers = Arc::new(Mutex::new(Vec::new()));
+        let mut senders = Arc::new(Mutex::new(Vec::new()));
+        return Cameras {
+            cameras: cameras,
+            receivers: receivers,
+            senders: senders,
+        }
+    }
+}
 
 fn setup(
     mut commands: Commands,
@@ -174,16 +238,53 @@ fn setup(
     mut scene_controller: ResMut<SceneController>,
     render_device: Res<RenderDevice>,
 ) {
-    let render_target = setup_render_target(
-        &mut commands,
-        &mut images,
-        &render_device,
-        &mut scene_controller,
-        40,
-        "main_scene".into(),
-    );
+    let mut cameras = Arc::new(Mutex::new(Vec::new()));
+    let mut receivers = Arc::new(Mutex::new(Vec::new()));
+    let mut senders = Arc::new(Mutex::new(Vec::new()));
 
-    // Scene example for non black box picture
+    for i in 0..NUM_CAMERAS {
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        let render_target = setup_render_target(
+            &mut commands,
+            &mut images,
+            &render_device,
+            &mut scene_controller,
+            40,
+            format!("main_scene_{}", i),
+            i
+        );
+        let up: Vec3;
+        if i % 2 == 0 {
+            up = Vec3::Y;
+        }
+        else {
+            up = Vec3::X;
+        }
+        let camera_entity = commands.spawn((Camera3dBundle {
+            transform: Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, up),
+            camera: Camera {
+                target: render_target,
+                ..default()
+            },
+            ..default()
+        },)).id();
+
+        cameras.lock().unwrap().push(camera_entity);
+        receivers.lock().unwrap().push(receiver);
+        senders.lock().unwrap().push(sender);
+    }
+
+
+    commands.insert_resource(Cameras {
+        cameras,
+        receivers,
+        senders,
+    });
+
+
+    println!("INIT RESOURCE!");
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
     // circular base
     commands.spawn(PbrBundle {
         mesh: meshes.add(Circle::new(4.0)),
@@ -214,23 +315,8 @@ fn setup(
         transform: Transform::from_xyz(4.0, 8.0, 4.0),
         ..default()
     });
-    let camera_settings = CameraSettings::default();
-    commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_translation(camera_settings.position)
-                .looking_at(camera_settings.look_at, camera_settings.up),
-            tonemapping: Tonemapping::None,
-            camera: Camera {
-                target: render_target,
-                ..default()
-            },
-            ..default()
-        },
-        camera_settings,
-        MainCamera,
-    ));
 }
-fn movement(
+/*fn movement(
     mut cam_query: Query<(&mut Transform, &CameraSettings), With<MainCamera>>,
     communication: Res<Communication>,
     time: Res<Time>
@@ -273,7 +359,14 @@ fn movement(
             _ => {}
         }
     }
+}*/
+fn extract_cameras(
+    mut commands: Commands,
+    cameras: Extract<Res<Cameras>>, // Используем Extract для явного указания источника
+) {
+    commands.insert_resource(cameras.clone());
 }
+
 fn scene_update(
     mut cube_query: Query<&mut Transform, With<Cube>>,
     time: Res<Time>,
@@ -298,21 +391,26 @@ fn scene_update(
 pub struct ImageCopyPlugin;
 impl Plugin for ImageCopyPlugin {
     fn build(&self, app: &mut App) {
+
         let (s, r) = crossbeam_channel::unbounded();
 
         let render_app = app
             .insert_resource(MainWorldReceiver(r))
             .sub_app_mut(RenderApp);
 
+        //render_app.init_resource::<Cameras>();
+
         let mut graph = render_app.world_mut().resource_mut::<RenderGraph>();
         graph.add_node(ImageCopy, ImageCopyDriver);
         graph.add_node_edge(bevy::render::graph::CameraDriverLabel, ImageCopy);
-
         render_app
             .insert_resource(RenderWorldSender(s))
+            .add_systems(ExtractSchedule, extract_cameras)
             // Make ImageCopiers accessible in RenderWorld system and plugin
-            .add_systems(ExtractSchedule, image_copy_extract)
-            // Receives image data from buffer to channel
+            .add_systems(ExtractSchedule, (
+                extract_cameras,
+                image_copy_extract
+            ).chain())
             // so we need to run it after the render graph is done
             .add_systems(Render, receive_image_from_buffer.after(RenderSet::Render));
     }
@@ -326,6 +424,7 @@ fn setup_render_target(
     scene_controller: &mut ResMut<SceneController>,
     pre_roll_frames: u32,
     scene_name: String,
+    camera_id: usize,
 ) -> RenderTarget {
     let size = Extent3d {
         width: scene_controller.width,
@@ -359,6 +458,7 @@ fn setup_render_target(
         render_target_image_handle.clone(),
         size,
         render_device,
+        camera_id
     ));
 
     commands.spawn(ImageToSave(cpu_image_handle));
@@ -386,6 +486,7 @@ struct ImageCopier {
     buffer: Buffer,
     enabled: Arc<AtomicBool>,
     src_image: Handle<Image>,
+    camera_index: usize
 }
 
 impl ImageCopier {
@@ -393,6 +494,7 @@ impl ImageCopier {
         src_image: Handle<Image>,
         size: Extent3d,
         render_device: &RenderDevice,
+        camera_index: usize
     ) -> ImageCopier {
         let padded_bytes_per_row =
             RenderDevice::align_copy_bytes_per_row((size.width) as usize) * 4;
@@ -408,6 +510,7 @@ impl ImageCopier {
             buffer: cpu_buffer,
             src_image,
             enabled: Arc::new(AtomicBool::new(true)),
+            camera_index
         }
     }
 
@@ -497,33 +600,46 @@ impl render_graph::Node for ImageCopyDriver {
 fn receive_image_from_buffer(
     image_copiers: Res<ImageCopiers>,
     render_device: Res<RenderDevice>,
-    sender: Res<RenderWorldSender>,
+    cameras: Res<Cameras>,
 ) {
-    for image_copier in image_copiers.0.iter() {
-        if !image_copier.enabled() {
+    let senders_guard = cameras.senders.lock().unwrap();
+    
+    // Перебираем копировщики по индексам
+    for (index, copier) in image_copiers.0.iter().enumerate() {
+        if !copier.enabled() {
             continue;
         }
 
-        let buffer_slice = image_copier.buffer.slice(..);
+        // Проверяем наличие соответствующего sender
+        let Some(sender) = senders_guard.get(index) else {
+            error!("No sender for camera index {}", index);
+            continue;
+        };
 
-        let (s, r) = crossbeam_channel::bounded(1);
+        let buffer_slice = copier.buffer.slice(..);
+        let (sync_s, sync_r) = crossbeam_channel::bounded(1);
 
-        // Maps the buffer so it can be read on the cpu
-        buffer_slice.map_async(MapMode::Read, move |r| match r {
-            // This will execute once the gpu is ready, so after the call to poll()
-            Ok(r) => s.send(r).expect("Failed to send map update"),
-            Err(err) => panic!("Failed to map buffer {err}"),
+        buffer_slice.map_async(MapMode::Read, move |result| {
+            sync_s.send(result).unwrap_or_else(|_| error!("Sync channel closed"));
         });
 
-        // This blocks until the gpu is done executing everything
         render_device.poll(Maintain::wait()).panic_on_timeout();
 
-        // This blocks until the buffer is mapped
-        r.recv().expect("Failed to receive the map_async message");
+        match sync_r.recv() {
+            Ok(Ok(())) => {
+                let data = buffer_slice.get_mapped_range().to_vec();
+                if let Err(e) = sender.send(data) {
+                    error!("Failed to send image for camera {}: {}", index, e);
+                }
+                else {
+                    //println!("data sent to camera {:?}", index);
+                }
+            },
+            Ok(Err(err)) => error!("Buffer mapping failed for camera {}: {}", index, err),
+            Err(_) => error!("Sync channel error for camera {}", index),
+        }
 
-        // This could fail on app exit, if Main world clears resources (including receiver) while Render world still renders
-        let _ = sender.send(buffer_slice.get_mapped_range().to_vec());
-        image_copier.buffer.unmap();
+        copier.buffer.unmap();
     }
 }
 
@@ -534,7 +650,7 @@ struct ImageToSave(Handle<Image>);
 // Takes from channel image content sent from render world and saves it to disk
 fn update(
     images_to_save: Query<&ImageToSave>,
-    receiver: Res<MainWorldReceiver>,
+    cameras: Res<Cameras>,
     mut images: ResMut<Assets<Image>>,
     mut scene_controller: ResMut<SceneController>,
     mut app_exit_writer: EventWriter<AppExit>,
@@ -542,88 +658,117 @@ fn update(
 ) {
     if let SceneState::Render(n) = scene_controller.state {
         if n < 1 {
-            // We don't want to block the main world on this,
-            // so we use try_recv which attempts to receive without blocking
-            let mut image_data = Vec::new();
-            while let Ok(data) = receiver.try_recv() {
-                // image generation could be faster than saving to fs,
-                // that's why use only last of them
-                image_data = data;
+            let receivers_guard = match cameras.receivers.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            // Собираем данные для всех камер
+            let mut camera_frames = Vec::new();
+            let num_cameras = receivers_guard.len();
+
+            for (camera_index, receiver) in receivers_guard.iter().enumerate() {
+                let mut image_data = Vec::new();
+                
+                // Читаем все данные для камеры
+                while let Ok(data) = receiver.try_recv() {
+                    image_data = data;
+                }
+
+                // Обрабатываем изображение только если есть данные
+                if !image_data.is_empty() {
+                    if let Some(image_to_save) = images_to_save.iter().nth(camera_index) {
+                        let img_bytes = images.get_mut(image_to_save.id()).unwrap();
+
+                        // Обработка формата изображения
+                        let row_bytes = img_bytes.width() as usize
+                            * img_bytes.texture_descriptor.format.pixel_size();
+                        let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
+
+                        if row_bytes == aligned_row_bytes {
+                            img_bytes.data.clone_from(&image_data);
+                        } else {
+                            img_bytes.data = image_data
+                                .chunks(aligned_row_bytes)
+                                .take(img_bytes.height() as usize)
+                                .flat_map(|row| &row[..row_bytes.min(row.len())])
+                                .cloned()
+                                .collect();
+                        }
+
+                        // Конвертация в raw пиксели
+                        let img = match img_bytes.clone().try_into_dynamic() {
+                            Ok(img) => img.to_rgba8(),
+                            Err(e) => panic!("Failed to create image buffer {e:?}"),
+                        };
+
+                        camera_frames.push(Some(img.into_raw()));
+                    }
+                } else {
+                    camera_frames.push(None);
+                }
             }
-            if !image_data.is_empty() {
-                for image in images_to_save.iter() {
-                    // Fill correct data from channel to image
-                    let img_bytes = images.get_mut(image.id()).unwrap();
 
-                    // We need to ensure that this works regardless of the image dimensions
-                    // If the image became wider when copying from the texture to the buffer,
-                    // then the data is reduced to its original size when copying from the buffer to the image.
-                    let row_bytes = img_bytes.width() as usize
-                        * img_bytes.texture_descriptor.format.pixel_size();
-                    let aligned_row_bytes = RenderDevice::align_copy_bytes_per_row(row_bytes);
-                    if row_bytes == aligned_row_bytes {
-                        img_bytes.data.clone_from(&image_data);
-                    } else {
-                        // shrink data to original image size
-                        img_bytes.data = image_data
-                            .chunks(aligned_row_bytes)
-                            .take(img_bytes.height() as usize)
-                            .flat_map(|row| &row[..row_bytes.min(row.len())])
-                            .cloned()
-                            .collect();
-                    }
+            // Отправляем данные клиентам
+            let clients = communication.clients.clone();
+            let clients_guard = clients.lock().unwrap();
+            let mut frame_numbers_guard = communication.frame_numbers.lock().unwrap();
 
-                    // Create RGBA Image Buffer
-                    let img = match img_bytes.clone().try_into_dynamic() {
-                        Ok(img) => img.to_rgba8(),
-                        Err(e) => panic!("Failed to create image buffer {e:?}"),
-                    };
-                    let rgba_pixels: Vec<u8> = img.into_raw();
+            for (client_idx, client_id) in clients_guard.iter().enumerate() {
+                if client_idx >= communication.senders.len() {
+                    break;
+                }
 
-                    let clients = communication.clients.clone();
-                    let sender_clone = communication.sender.clone();
-
-                    if !clients.lock().unwrap().is_empty() {
-                        let frames = communication.frame_number.clone();
-                        let mut frame_number = frames.lock().unwrap();
-                        *frame_number = (*frame_number + 1) % 1000;
-
-                        let frame = span!(Level::TRACE, "frame", n = *frame_number);
-                        let _enter = frame.enter();
-                        
-                        trace!("Was received from main world");
-
-                        let mut frame_to_send: Vec<u8> = vec![];
-                        if communication.lz4_compression {
-                            match encode_image_lz4(&rgba_pixels) {
-                                Ok(value) => {
-                                    frame_to_send = value;
-                                },
-                                Err(e) => {
-                                    trace!("Error with lz4!, {:?}", e);
-                                    return;
-                                }
+                // Определяем камеру для клиента
+                let camera_index = client_idx % camera_frames.len();
+                
+                // Получаем данные для этой камеры
+                if let Some(rgba_pixels) = &camera_frames[camera_index] {
+                    let frame_to_send = if communication.lz4_compression {
+                        match encode_image_lz4(rgba_pixels) {
+                            Ok(mut compressed) => {
+                                let mut header = camera_index.to_be_bytes().to_vec();
+                                header.append(&mut compressed);
+                                header
                             }
-                        }
-                        else {
-                            frame_to_send = rgba_pixels;
-                        }
-                        match sender_clone.try_send(ChannelMessage::PixelsAndFrame(frame_to_send, *frame_number)) {
-                            Ok(_) => {trace!("Was sended from update to server")}
                             Err(e) => {
-                                println!("error with sending {:?}", e)
+                                trace!("LZ4 error: {:?}", e);
+                                continue;
                             }
                         }
-                    }
+                    } else {
+                        rgba_pixels.clone()
+                    };
 
+                    // Обновляем номер кадра
+                    frame_numbers_guard[client_idx] = (frame_numbers_guard[client_idx] + 1) % 1000;
+
+                    // Отправляем сообщение
+                    match communication.senders[client_idx].try_send(
+                        ChannelMessage::PixelsAndFrame(
+                            frame_to_send,
+                            frame_numbers_guard[client_idx],
+                        )
+                    ) {
+                        Ok(_) => trace!(
+                            "Sent frame {} from camera {} to client {}",
+                            frame_numbers_guard[client_idx],
+                            camera_index,
+                            client_id
+                        ),
+                        Err(e) => error!("Send error to client {}: {:?}", client_id, e),
+                    }
                 }
-                if scene_controller.single_image {
-                    app_exit_writer.send(AppExit::Success);
-                }
+            }
+
+            if scene_controller.single_image {
+                app_exit_writer.send(AppExit::Success);
             }
         } else {
-            // clears channel for skipped frames
-            while receiver.try_recv().is_ok() {}
+            let mut receivers_guard = cameras.receivers.lock().unwrap();
+            for receiver in receivers_guard.iter_mut() {
+                while receiver.try_recv().is_ok() {}
+            }
             scene_controller.state = SceneState::Render(n - 1);
         }
     }

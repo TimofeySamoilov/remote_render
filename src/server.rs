@@ -4,6 +4,7 @@ use bevy::{
 use std::{
     sync::{
         Arc,
+        Mutex,
     },
     time::Duration,
 };
@@ -13,7 +14,6 @@ use bevy_tokio_tasks::*;
 use remote_render::greeter_server::{Greeter, GreeterServer};
 use remote_render::key_board_control_server::{KeyBoardControl, KeyBoardControlServer};
 use remote_render::{ControlRequest, FrameDispatch};
-use std::sync::Mutex;
 use std::{error::Error, pin::Pin};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, Stream};
@@ -24,41 +24,52 @@ use tracing::{span, Level};
 pub mod remote_render {
     tonic::include_proto!("remote_render");
 }
+
+
 #[derive(Resource)]
 pub struct Communication {
-    pub receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
-    pub sender: mpsc::Sender<ChannelMessage>,
+    pub receivers: Arc<Mutex<Vec<Arc<Mutex<mpsc::Receiver<ChannelMessage>>>>>>,
+    pub senders: Vec<mpsc::Sender<ChannelMessage>>,
     pub clients: Arc<Mutex<Vec<u32>>>,
-    pub frame_number: Arc<Mutex<u32>>,
+    pub frame_numbers: Arc<Mutex<Vec<u32>>>, // Теперь для каждого клиента свой frame_number
     pub lz4_compression: bool,
-    pub pressed_key: Arc<Mutex<u8>>
+    pub pressed_key: Arc<Mutex<u8>>,
 }
+
 impl Default for Communication {
     fn default() -> Self {
-        let (sender_rx, receiver_rx): (mpsc::Sender<ChannelMessage>, mpsc::Receiver<ChannelMessage>) =
-            mpsc::channel(10000);
+        // Создаем 4 канала для 4 клиентов
+        let mut senders = Vec::new();
+        let mut receivers = Vec::new();
+        
+        for _ in 0..4 {
+            let (sender, receiver) = mpsc::channel(10000);
+            senders.push(sender);
+            receivers.push(Arc::new(Mutex::new(receiver)));
+        }
+
         Communication {
-            receiver: Arc::new(Mutex::new(receiver_rx)),
-            sender: sender_rx,
+            receivers: Arc::new(Mutex::new(receivers)),
+            senders,
             clients: Arc::new(Mutex::new(vec![])),
-            frame_number: Arc::new(Mutex::new(0)),
-            lz4_compression: true,
-            pressed_key: Arc::new(Mutex::new(0u8))
+            frame_numbers: Arc::new(Mutex::new(vec![0; 4])), // Инициализируем для 4 клиентов
+            lz4_compression: false,
+            pressed_key: Arc::new(Mutex::new(0u8)),
         }
     }
 }
 #[derive(Debug)]
 struct RenderService {
-    frame_receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
+    frame_receivers: Arc<Mutex<Vec<Arc<Mutex<mpsc::Receiver<ChannelMessage>>>>>>,
     clients: Arc<Mutex<Vec<u32>>>,
 }
 impl RenderService {
     pub fn new(
-        receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
+        receivers: Arc<Mutex<Vec<Arc<Mutex<mpsc::Receiver<ChannelMessage>>>>>>,
         clients: Arc<Mutex<Vec<u32>>>,
     ) -> Self {
         RenderService {
-            frame_receiver: receiver,
+            frame_receivers: receivers,
             clients: clients,
         }
     }
@@ -86,10 +97,11 @@ impl KeyBoardControl for KeyBoardButtons {
     ) -> Result<Response<ControlRequest>, Status> {
         let request = request.into_inner();
         let message = request.message;
-        let id = request.id;
-        println!("ID ID ID ID    {:?}", id);
+        //let id = request.id;
+        //println!("{:?}", message);
+        /*println!("ID ID ID ID    {:?}", id);
         let mut key = self.pressed_key.lock().unwrap();
-        *key = compare_key(message);
+        *key = compare_key(message);*/
         Ok(Response::new(ControlRequest {
             message: "OK".to_string(),
             id: 0,
@@ -110,71 +122,60 @@ pub fn compare_key(s: String) -> u8 {
 #[tonic::async_trait]
 impl Greeter for RenderService {
     type SayHelloStream = Pin<Box<dyn Stream<Item = Result<FrameDispatch, Status>> + Send>>;
+    
     async fn say_hello(
         &self,
         request: Request<ControlRequest>,
     ) -> Result<Response<Self::SayHelloStream>, Status> {
-        
-        let mut clients = self.clients.lock().unwrap();
-        clients.push(request.into_inner().id);
-
         let (tx, rx) = mpsc::channel(128);
-        let receiver_clone = self.frame_receiver.clone();
+        let client_id = request.into_inner().id;
+        
+        // Регистрация клиента и получение camera_id
+        let camera_id = {
+            let mut clients = self.clients.lock().unwrap();
+            clients.push(client_id);
+            clients.len().checked_sub(1).unwrap_or(0)
+        };
+        // Получаем нужный receiver
+        let receiver = {
+            let receivers = self.frame_receivers.lock().unwrap();
+            receivers.get(camera_id)
+                .ok_or_else(|| Status::internal("No receiver for this camera"))?
+                .clone()
+        };
         
         tokio::spawn(async move {
-            // communication with client
             loop {
-                let screen: Vec<u8>;
-                let data = receiver_clone.lock().unwrap().try_recv();
-                let mut frame: u32 = 0;
-                match data {
-                    Ok(channel_message) => {
-                        match channel_message {
-                            ChannelMessage::PixelsAndFrame(pixels, id) => {
-                                screen = pixels;
-                                frame = id;
-                            }
-                            _ => {
-                                tokio::time::sleep(Duration::from_millis(1)).await; // Try again soon
-                                continue;
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        tokio::time::sleep(Duration::from_millis(1)).await; // Try again soon
+                let message = {
+                    let mut guard = receiver.lock().unwrap();
+                    guard.try_recv()
+                };
+                
+                let (screen, frame) = match message {
+                    Ok(ChannelMessage::PixelsAndFrame(pixels, frame_id)) => (pixels, frame_id),
+                    _ => {
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                         continue;
                     }
-                }
-                let span = span!(Level::TRACE, "frame", n = frame);
-                let _enter = span.enter();
-                match tx.try_send(Result::<_, Status>::Ok(FrameDispatch {
-                    message: screen.clone(),
-                    frame: frame
-                })) {
-                    Ok(_) => {
-                        trace!("frame sent to client");
-                    }
-                    Err(e) => {
-                        trace!("frame was skipped! {:?}", e);
-                    }
+                };
+                
+                if let Err(e) = tx.try_send(Ok(FrameDispatch { message: screen, frame })) {
+                    trace!("Frame skip: {:?}", e);
                 }
             }
         });
-
-        let output_stream = ReceiverStream::new(rx);
-        Ok(Response::new(
-            Box::pin(output_stream) as Self::SayHelloStream
-        ))
+        
+        Ok(Response::new(Box::pin(ReceiverStream::new(rx)) as _))
     }
 }
 // function, which starts sever
 async fn start_server(
-    receiver: Arc<Mutex<mpsc::Receiver<ChannelMessage>>>,
+    receivers: Arc<Mutex<Vec<Arc<Mutex<mpsc::Receiver<ChannelMessage>>>>>>,
     clients: Arc<Mutex<Vec<u32>>>,
     pressed_key: Arc<Mutex<u8>>
 ) -> Result<(), Box<dyn Error>> {
     let greeter_addr = "[::1]:50051".parse()?;
-    let greeter = RenderService::new(receiver, clients);
+    let greeter = RenderService::new(receivers, clients);
     let keyboard = KeyBoardButtons::new(pressed_key);
 
     tokio::spawn(async move {
@@ -190,11 +191,11 @@ async fn start_server(
 
 // system, which uses start_server()
 pub fn server_system(runtime: ResMut<TokioTasksRuntime>, communication: ResMut<Communication>) {
-    let receiver_clone = communication.receiver.clone();
+    let receivers_clone = communication.receivers.clone();
     let clients = communication.clients.clone();
     let pressed_key = communication.pressed_key.clone();
     runtime.spawn_background_task(|_ctx| async move {
-        match start_server(receiver_clone, clients, pressed_key).await {
+        match start_server(receivers_clone, clients, pressed_key).await {
             Ok(_) => {
                 info!("Server started...")
             }
