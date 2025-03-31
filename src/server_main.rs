@@ -47,7 +47,6 @@ struct MainWorldReceiver(Receiver<Vec<u8>>);
 /// This will send asynchronously any data to the main world
 #[derive(Resource, Deref)]
 struct RenderWorldSender(Sender<Vec<u8>>);
-
 // Parameters of resulting image
 struct AppConfig {
     width: u32,
@@ -242,7 +241,15 @@ fn setup(
     let mut receivers = Arc::new(Mutex::new(Vec::new()));
     let mut senders = Arc::new(Mutex::new(Vec::new()));
 
-    for i in 0..NUM_CAMERAS {
+    let scene_center = Vec3::new(0.0, 0.5, 0.0);
+    // Радиус окружности для расположения камер
+    let radius = 10.0;
+    // Углы для размещения камер (4 камеры через 90 градусов)
+    let angles: [f32; 4] = [0.0, 90.0, 180.0, 270.0];
+    // Высота камер относительно центра сцены
+    let camera_height = 4.5;
+
+    for (i, &angle_deg) in angles.iter().enumerate() {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let render_target = setup_render_target(
             &mut commands,
@@ -253,15 +260,17 @@ fn setup(
             format!("main_scene_{}", i),
             i
         );
-        let up: Vec3;
-        if i % 2 == 0 {
-            up = Vec3::Y;
-        }
-        else {
-            up = Vec3::X;
-        }
+
+        let angle = angle_deg.to_radians();
+        // Вычисляем позицию камеры на окружности
+        let x = scene_center.x + radius * angle.cos();
+        let z = scene_center.z + radius * angle.sin();
+        let position = Vec3::new(x, camera_height, z);
+        // Направление взгляда камеры (в центр сцены)
+        let look_direction = scene_center - position;
+
         let camera_entity = commands.spawn((Camera3dBundle {
-            transform: Transform::from_xyz(-2.5, 4.5, 9.0).looking_at(Vec3::ZERO, up),
+            transform: Transform::from_translation(position).looking_to(look_direction, Vec3::Y),
             camera: Camera {
                 target: render_target,
                 ..default()
@@ -281,13 +290,9 @@ fn setup(
         senders,
     });
 
-
-    println!("INIT RESOURCE!");
-    std::thread::sleep(std::time::Duration::from_secs(2));
-
     // circular base
     commands.spawn(PbrBundle {
-        mesh: meshes.add(Circle::new(4.0)),
+        mesh: meshes.add(Circle::new(7.0)),
         material: materials.add(Color::WHITE),
         transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         ..default()
@@ -299,12 +304,61 @@ fn setup(
             material: materials.add(Color::srgb_u8(124, 144, 255)),
             transform: Transform {
                 translation: Vec3::new(0.0, 0.5, 0.0),
-                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4), // Поворот на 45 градусов вокруг оси Y
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
                 scale: Vec3::new(1.0, 1.0, 1.0),
             },
             ..default()
         },
-        Cube, // Добавление маркера компонента Cube
+        Cube,
+    ));
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(104, 144, 45)),
+            transform: Transform {
+                translation: Vec3::new(2.0, 0.5, 2.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+            },
+            ..default()
+        },
+    ));
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(200, 14, 5)),
+            transform: Transform {
+                translation: Vec3::new(-2.0, 0.5, -2.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+            },
+            ..default()
+        },
+    ));
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(200, 14, 5)),
+            transform: Transform {
+                translation: Vec3::new(-2.0, 0.5, -2.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+            },
+            ..default()
+        },
+    ));
+    commands.spawn((
+        PbrBundle {
+            // Заменяем Cuboid на Sphere с радиусом 0.5
+            mesh: meshes.add(Sphere::new(0.5)), 
+            material: materials.add(Color::srgb_u8(15, 100, 200)),
+            transform: Transform {
+                translation: Vec3::new(-2.0, 0.5, 5.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                scale: Vec3::new(1.0, 1.0, 1.0),
+            },
+            ..default()
+        },
     ));
     // light
     commands.spawn(PointLightBundle {
