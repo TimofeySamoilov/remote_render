@@ -1,5 +1,5 @@
 mod server;
-use crate::server::{Communication, server_system, ChannelMessage};
+use crate::server::{Communication, server_system, ChannelMessage, CamerasMovement};
 use std::sync::Mutex;
 use bevy::{
     app::{AppExit, ScheduleRunnerPlugin},
@@ -81,6 +81,7 @@ fn main() {
         ))
         .insert_resource(ClearColor(Color::srgb_u8(0, 0, 0)))
         .insert_resource(Communication::default())
+        .insert_resource(CamerasMovement::default())
         .add_plugins(bevy_tokio_tasks::TokioTasksPlugin::default())
         .add_plugins(
             DefaultPlugins
@@ -105,54 +106,9 @@ fn main() {
         .add_systems(Update, scene_update)
         //.add_systems(Update, movement)
         .add_systems(PostUpdate, update)
+        .add_systems(Update, check_cameras)
         //.add_systems(Update, extract_normals_system.after(update))
-        .add_systems(PostUpdate, check_cameras_data)
         .run();
-}
-
-fn check_cameras_data(
-    cameras: Res<Cameras>,
-) {
-    /*// Блокируем доступ к получателям
-    let receivers_guard = match cameras.receivers.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            eprintln!("Mutex poisoned, using recovered data");
-            poisoned.into_inner()
-        }
-    };
-
-    // Проверяем наличие хотя бы одной камеры
-    if receivers_guard.is_empty() {
-        println!("No cameras available");
-        return;
-    }
-
-    // Получаем первый receiver
-    let first_receiver = &receivers_guard[0];
-    
-    // Пытаемся получить данные без блокировки
-    match first_receiver.try_recv() {
-        Ok(data) => {
-            println!("First camera data size: {} bytes", data.len());
-            // Для вывода содержимого раскомментируйте:
-            // println!("Data: {:?}", data);
-        },
-        Err(crossbeam_channel::TryRecvError::Empty) => {
-            println!("First camera queue is empty");
-        },
-        Err(crossbeam_channel::TryRecvError::Disconnected) => {
-            println!("First camera channel disconnected");
-        }
-    }
-
-    // Дополнительно: проверяем размерность
-    let senders_guard = cameras.senders.lock().unwrap();
-    println!(
-        "Total cameras: {}, First camera sender status: {}",
-        senders_guard.len(),
-        if senders_guard[0].is_empty() { "inactive" } else { "active" }
-    );*/
 }
 
 /// Capture image settings and state
@@ -212,13 +168,13 @@ impl Default for CameraSettings {
 const NUM_CAMERAS: usize = 4;
 #[derive(Resource, Clone)]
 pub struct Cameras {
-    cameras: Arc<Mutex<Vec<Entity>>>,
+    cameras: Vec<Entity>,
     receivers: Arc<Mutex<Vec<Receiver<Vec<u8>>>>>,
     senders: Arc<Mutex<Vec<Sender<Vec<u8>>>>>,
 }
 impl Default for Cameras {
     fn default() -> Self {
-        let mut cameras = Arc::new(Mutex::new(Vec::new()));
+        let mut cameras = Vec::new();
         let mut receivers = Arc::new(Mutex::new(Vec::new()));
         let mut senders = Arc::new(Mutex::new(Vec::new()));
         return Cameras {
@@ -236,8 +192,9 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut scene_controller: ResMut<SceneController>,
     render_device: Res<RenderDevice>,
+    asset_server: Res<AssetServer>
 ) {
-    let mut cameras = Arc::new(Mutex::new(Vec::new()));
+    let mut cameras = Vec::new();
     let mut receivers = Arc::new(Mutex::new(Vec::new()));
     let mut senders = Arc::new(Mutex::new(Vec::new()));
 
@@ -278,7 +235,7 @@ fn setup(
             ..default()
         },)).id();
 
-        cameras.lock().unwrap().push(camera_entity);
+        cameras.push(camera_entity);
         receivers.lock().unwrap().push(receiver);
         senders.lock().unwrap().push(sender);
     }
@@ -289,6 +246,16 @@ fn setup(
         receivers,
         senders,
     });
+
+
+    let scene_handle: Handle<Scene> = asset_server.load("models/robot.glb#Scene0");
+    commands.spawn(SceneBundle {
+        scene: scene_handle,
+        transform: Transform { translation: Vec3::new(0.0, 1.0, -2.3), rotation: Quat::from_rotation_y(160.0), scale: (Vec3 { x: (0.5), y: (0.5), z: (0.5) }) },
+        ..default()
+    });
+
+
 
     // circular base
     commands.spawn(PbrBundle {
@@ -369,51 +336,18 @@ fn setup(
         transform: Transform::from_xyz(4.0, 8.0, 4.0),
         ..default()
     });
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            illuminance: 5000.0, // Освещенность в люксах
+            shadows_enabled: true,
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, 10.0, 0.0)
+            .looking_at(Vec3::ZERO, Vec3::Y),
+        ..default()
+    });
 }
-/*fn movement(
-    mut cam_query: Query<(&mut Transform, &CameraSettings), With<MainCamera>>,
-    communication: Res<Communication>,
-    time: Res<Time>
-) {
-    let pressed_key = *communication.pressed_key.lock().unwrap();
-    
-    if let Ok((mut camera, settings)) = cam_query.get_single_mut() {
-        let speed = settings.speed * time.delta_seconds();
-        match pressed_key {
-            1 => {
-                let left = camera.left();
-                camera.translation += left * speed;
-            }
-            2 => {
-                let forward = camera.forward();
-                camera.translation += forward * speed;
-            }
-            3 => {
-                let right = camera.right();
-                camera.translation += right * speed;
-            }
-            4 => {
-                let backward = camera.back();
-                camera.translation += backward * speed;
-            }
-            5 => {
-                camera.rotate_y(speed / 5.0);
-            }
-            6 => {
-                camera.rotate_y(-speed / 5.0);
-            }
-            7 => {
-                let up = camera.up();
-                camera.translation += up * speed;
-            }
-            8 => {
-                let down = camera.down();
-                camera.translation += down * speed;
-            }
-            _ => {}
-        }
-    }
-}*/
+
 fn extract_cameras(
     mut commands: Commands,
     cameras: Extract<Res<Cameras>>, // Используем Extract для явного указания источника
@@ -859,4 +793,37 @@ fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Er
     // Finish the encoder (no need for extra read_to_end). The compressed data is already in `compressed_data`.
     let _ = encoder.finish();
     Ok(compressed_data)
+}
+
+pub fn check_cameras(
+    mut cameras_movement: ResMut<CamerasMovement>,
+    cameras: ResMut<Cameras>,
+    communication: ResMut<Communication>,
+    mut transforms: Query<&mut Transform>,
+) {
+    let button_receiver = &mut cameras_movement.button_receiver;
+    let clients = communication.clients.lock().unwrap();
+    let cameras_entities = &cameras.cameras;
+
+    while let Ok((id, button)) = button_receiver.try_recv() {
+        if let Some(client_idx) = clients.iter().position(|&client_id| client_id == id) {
+            if let Some(camera_entity) = cameras_entities.get(client_idx) {
+                
+                if let Ok(mut transform) = transforms.get_mut(*camera_entity) {
+                    let speed = 0.5;
+                    
+                    // Вычисляем направления ДО изменения transform
+                    let right = transform.right();
+                    let forward = transform.forward();
+                    match button.as_str() {
+                        "Left" => transform.translation -= right * speed,
+                        "Right" => transform.translation += right * speed,
+                        "Up" => transform.translation += forward * speed,
+                        "Down" => transform.translation -= forward * speed,
+                        _ => (),
+                    }
+                }
+            }
+        }
+    }
 }

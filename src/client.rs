@@ -1,14 +1,12 @@
-use bevy::input::keyboard::Key;
-use eframe::egui::{self, TextureOptions, TextureHandle, ColorImage};
-use h2::client;
+use eframe::egui::{self, TextureOptions, TextureHandle, ColorImage, Key};
+use prost::Message;
 use rdev::{listen, EventType};
-use remote_render::greeter_client::GreeterClient;
+use remote_render::connection_client::ConnectionClient;
 use remote_render::key_board_control_client::KeyBoardControlClient;
 use remote_render::ControlRequest;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
-    mem
 };
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
@@ -33,7 +31,9 @@ struct ScreenApp {
     stop_sender: mpsc::Sender<bool>,
     texture: Option<TextureHandle>,
     ctx: egui::Context,
-    lz4_compression: bool
+    lz4_compression: bool,
+    tracked_keys: Vec<(Key, &'static str)>,
+    keyboard_sender: mpsc::Sender<String>
 }
 enum ChannelMessage {
     Pixels(Vec<u8>),
@@ -73,6 +73,8 @@ impl ScreenApp {
         let stop_rx = Arc::new(Mutex::new(stop_rx));
         let stop_rx_clone = Arc::clone(&stop_rx);
 
+        let (keyboard_sender, keyboard_receiver): (mpsc::Sender<String>, mpsc::Receiver<String>) = mpsc::channel(100);
+
         let texture = {
             let image = ColorImage::from_rgba_unmultiplied(
                  [900, 900],
@@ -89,11 +91,59 @@ impl ScreenApp {
             stop_sender: stop_tx,
             texture: Some(texture),
             ctx: ctx,
-            lz4_compression: false
+            lz4_compression: false,
+            tracked_keys: vec![
+                (Key::A, "A"),
+                (Key::B, "B"),
+                (Key::C, "C"),
+                (Key::D, "D"),
+                (Key::E, "E"),
+                (Key::F, "F"),
+                (Key::G, "G"),
+                (Key::H, "H"),
+                (Key::I, "I"),
+                (Key::J, "J"),
+                (Key::K, "K"),
+                (Key::L, "L"),
+                (Key::M, "M"),
+                (Key::N, "N"),
+                (Key::O, "O"),
+                (Key::P, "P"),
+                (Key::Q, "Q"),
+                (Key::R, "R"),
+                (Key::S, "S"),
+                (Key::T, "T"),
+                (Key::U, "U"),
+                (Key::V, "V"),
+                (Key::W, "W"),
+                (Key::X, "X"),
+                (Key::Y, "Y"),
+                (Key::Z, "Z"),
+                (Key::Num0, "0"),
+                (Key::Num1, "1"),
+                (Key::Num2, "2"),
+                (Key::Num3, "3"),
+                (Key::Num4, "4"),
+                (Key::Num5, "5"),
+                (Key::Num6, "6"),
+                (Key::Num7, "7"),
+                (Key::Num8, "8"),
+                (Key::Num9, "9"),
+                (Key::Escape, "Escape"),
+                (Key::Enter, "Enter"),
+                (Key::Space, "Space"),
+                (Key::ArrowLeft, "Left"),
+                (Key::ArrowRight, "Right"),
+                (Key::ArrowUp, "Up"),
+                (Key::ArrowDown, "Down"),
+                (Key::Backspace, "Backspace"),
+                (Key::Tab, "Tab")
+            ],
+            keyboard_sender: keyboard_sender
         };
         let client_id = generate_id();
         tokio::spawn(async move {
-            match GreeterClient::connect("http://[::1]:50051").await {
+            match ConnectionClient::connect("http://[::1]:50051").await {
                 Ok(mut client) => {
                     let _communication =
                         streaming_data(&mut client, shared_tx, stop_rx_clone, config.lz4_compression, client_id).await;
@@ -106,18 +156,24 @@ impl ScreenApp {
                 }
             }
         });
+        let mut keyboard_receiver_clone = Arc::new(Mutex::new(keyboard_receiver));
         tokio::spawn(async move {
             match KeyBoardControlClient::connect("http://[::1]:50051").await {
                 Ok(mut client) => {
-                    let pressed_key = Arc::new(Mutex::new(String::from("")));
-                    let pressed_key_clone = Arc::clone(&pressed_key);
-                    let _keyboard_check = tokio::spawn(keyboard(pressed_key, stop_rx));
                     loop {
-                        let key_clone = pressed_key_clone.lock().unwrap().to_string();
+                        let mut key;
+                        match keyboard_receiver_clone.lock().unwrap().try_recv() {
+                            Ok(received_key) => {
+                                key = received_key.to_string();
+                            }
+                            Err(e) => {
+                                key = "None".to_string();
+                            }
+                        }
 
                         match client
                             .say_keyboard(ControlRequest {
-                                message: key_clone.clone(),
+                                message: key,
                                 id: client_id,
                             })
                             .await
@@ -156,6 +212,18 @@ impl ScreenApp {
 impl eframe::App for ScreenApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
+
+
+
+            for (key, name) in &self.tracked_keys {
+                if ctx.input(|i| i.key_down(*key)) {
+                    self.keyboard_sender.try_send(name.to_string());
+                }
+            }
+
+
+            
+
             let mut frame: u32 = 0;
             if let Ok(data) = self.receiver.try_recv() {
                 match data {
@@ -183,7 +251,7 @@ impl eframe::App for ScreenApp {
 
 // client's part
 async fn streaming_data(
-    client: &mut GreeterClient<Channel>,
+    client: &mut ConnectionClient<Channel>,
     sender: mpsc::Sender<ChannelMessage>,
     _stop_rx: Arc<Mutex<mpsc::Receiver<bool>>>,
     lz4_indicator: bool,
@@ -220,7 +288,7 @@ async fn streaming_data(
 }
 
 // function monitoring keyboard buttons
-async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Receiver<bool>>>) {
+/*async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Receiver<bool>>>) {
     listen(move |event| {
         while let Ok(_data) = stop_rx.lock().unwrap().try_recv() {
             println!("Keyboard is closed");
@@ -238,7 +306,7 @@ async fn keyboard(shared_string: Arc<Mutex<String>>, stop_rx: Arc<Mutex<mpsc::Re
         }
     })
     .unwrap();
-}
+}*/
 
 fn decode_image_lz4(compressed_data: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut decoder = Decoder::new(compressed_data)?;
