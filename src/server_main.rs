@@ -103,10 +103,8 @@ fn main() {
         .init_resource::<SceneController>()
         .add_systems(Startup, setup)
         .add_systems(Startup, server_system)
-        .add_systems(Update, scene_update)
-        //.add_systems(Update, movement)
         .add_systems(PostUpdate, update)
-        .add_systems(Update, check_cameras)
+        .add_systems(Update, move_cameras)
         //.add_systems(Update, extract_normals_system.after(update))
         .run();
 }
@@ -144,9 +142,6 @@ enum SceneState {
 }
 
 #[derive(Component)]
-struct Cube;
-
-#[derive(Component)]
 struct CameraSettings {
     position: Vec3,
     look_at: Vec3,
@@ -169,16 +164,19 @@ const NUM_CAMERAS: usize = 4;
 #[derive(Resource, Clone)]
 pub struct Cameras {
     cameras: Vec<Entity>,
+    robots: Vec<Entity>,
     receivers: Arc<Mutex<Vec<Receiver<Vec<u8>>>>>,
     senders: Arc<Mutex<Vec<Sender<Vec<u8>>>>>,
 }
 impl Default for Cameras {
     fn default() -> Self {
         let mut cameras = Vec::new();
+        let mut robots = Vec::new();
         let mut receivers = Arc::new(Mutex::new(Vec::new()));
         let mut senders = Arc::new(Mutex::new(Vec::new()));
         return Cameras {
             cameras: cameras,
+            robots: robots,
             receivers: receivers,
             senders: senders,
         }
@@ -195,18 +193,11 @@ fn setup(
     asset_server: Res<AssetServer>
 ) {
     let mut cameras = Vec::new();
+    let mut robots = Vec::new();
     let mut receivers = Arc::new(Mutex::new(Vec::new()));
     let mut senders = Arc::new(Mutex::new(Vec::new()));
 
-    let scene_center = Vec3::new(0.0, 0.5, 0.0);
-    // Радиус окружности для расположения камер
-    let radius = 10.0;
-    // Углы для размещения камер (4 камеры через 90 градусов)
-    let angles: [f32; 4] = [0.0, 90.0, 180.0, 270.0];
-    // Высота камер относительно центра сцены
-    let camera_height = 4.5;
-
-    for (i, &angle_deg) in angles.iter().enumerate() {
+    for i in 0..4 {
         let (sender, receiver) = crossbeam_channel::unbounded();
         let render_target = setup_render_target(
             &mut commands,
@@ -218,16 +209,8 @@ fn setup(
             i
         );
 
-        let angle = angle_deg.to_radians();
-        // Вычисляем позицию камеры на окружности
-        let x = scene_center.x + radius * angle.cos();
-        let z = scene_center.z + radius * angle.sin();
-        let position = Vec3::new(x, camera_height, z);
-        // Направление взгляда камеры (в центр сцены)
-        let look_direction = scene_center - position;
-
         let camera_entity = commands.spawn((Camera3dBundle {
-            transform: Transform::from_translation(position).looking_to(look_direction, Vec3::Y),
+            transform: Transform::from_translation([0.0, 1.0, 0.0].into()),
             camera: Camera {
                 target: render_target,
                 ..default()
@@ -235,6 +218,18 @@ fn setup(
             ..default()
         },)).id();
 
+        let robot_handle: Handle<Scene> = asset_server.load("models/robot.glb#Scene0");
+        let robot_entity = commands.spawn(SceneBundle {
+            scene: robot_handle.clone(),
+            transform: Transform {
+                translation: Vec3::new(0.0, 0.8, 2.0),  // Смещаем по X для каждого робота
+                rotation: Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2),
+                scale: Vec3::splat(0.5),
+            },
+            ..default()
+        }).id();
+
+        robots.push(robot_entity);
         cameras.push(camera_entity);
         receivers.lock().unwrap().push(receiver);
         senders.lock().unwrap().push(sender);
@@ -243,71 +238,104 @@ fn setup(
 
     commands.insert_resource(Cameras {
         cameras,
+        robots,
         receivers,
         senders,
     });
 
-
-    let scene_handle: Handle<Scene> = asset_server.load("models/robot.glb#Scene0");
+    let shelf_handle: Handle<Scene> = asset_server.load("models/shelf.glb#Scene0");
     commands.spawn(SceneBundle {
-        scene: scene_handle,
-        transform: Transform { translation: Vec3::new(0.0, 1.0, -2.3), rotation: Quat::from_rotation_y(160.0), scale: (Vec3 { x: (0.5), y: (0.5), z: (0.5) }) },
+        scene: shelf_handle,
+        transform: Transform { translation: Vec3::new(4.0, 0.7, -5.0), rotation: Quat::default(), scale: (Vec3 { x: (0.5), y: (0.5), z: (0.5) }) },
+        ..default()
+    });
+    let shelf_handle: Handle<Scene> = asset_server.load("models/shelf.glb#Scene0");
+    commands.spawn(SceneBundle {
+        scene: shelf_handle,
+        transform: Transform { translation: Vec3::new(4.0, 0.7, 5.0), rotation: Quat::default(), scale: (Vec3 { x: (0.5), y: (0.5), z: (0.5) }) },
+        ..default()
+    });
+    let shelf_handle: Handle<Scene> = asset_server.load("models/shelf.glb#Scene0");
+    commands.spawn(SceneBundle {
+        scene: shelf_handle,
+        transform: Transform { translation: Vec3::new(-4.0, 0.7, 0.0), rotation: Quat::from_rotation_y(140.0), scale: (Vec3 { x: (0.5), y: (0.5), z: (0.5) }) },
         ..default()
     });
 
+    let box_handle: Handle<Scene> = asset_server.load("models/box.glb#Scene0");
+    commands.spawn(SceneBundle {
+        scene: box_handle,
+        transform: Transform { translation: Vec3::new(3.5, 0.3, 3.5), rotation: Quat::default(), scale: (Vec3 { x: (0.5), y: (0.5), z: (0.5) }) },
+        ..default()
+    }); 
+
+    // Walls
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(143, 218, 163)),
+            transform: Transform {
+                translation: Vec3::new(-20.0, 4.5, 0.0),
+                rotation: Quat::default(),
+                scale: Vec3::new(1.0, 10.0, 80.0),
+            },
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(216, 192, 94)),
+            transform: Transform {
+                translation: Vec3::new(20.0, 4.5, 0.0),
+                rotation: Quat::default(),
+                scale: Vec3::new(1.0, 10.0, 80.0),
+            },
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(156, 183, 201)),
+            transform: Transform {
+                translation: Vec3::new(0.0, 4.5, 20.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+                scale: Vec3::new(1.0, 10.0, 80.0),
+            },
+            ..default()
+        },
+    ));
+
+    commands.spawn((
+        PbrBundle {
+            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            material: materials.add(Color::srgb_u8(79, 169, 202)),
+            transform: Transform {
+                translation: Vec3::new(0.0, 4.5, -20.0),
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+                scale: Vec3::new(1.0, 10.0, 80.0),
+            },
+            ..default()
+        },
+    ));
 
 
     // circular base
     commands.spawn(PbrBundle {
-        mesh: meshes.add(Circle::new(7.0)),
+        mesh: meshes.add(Circle::new(40.0)),
         material: materials.add(Color::WHITE),
         transform: Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
         ..default()
     });
-    // cube
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            material: materials.add(Color::srgb_u8(124, 144, 255)),
-            transform: Transform {
-                translation: Vec3::new(0.0, 0.5, 0.0),
-                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
-                scale: Vec3::new(1.0, 1.0, 1.0),
-            },
-            ..default()
-        },
-        Cube,
-    ));
     commands.spawn((
         PbrBundle {
             mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
             material: materials.add(Color::srgb_u8(104, 144, 45)),
             transform: Transform {
                 translation: Vec3::new(2.0, 0.5, 2.0),
-                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
-                scale: Vec3::new(1.0, 1.0, 1.0),
-            },
-            ..default()
-        },
-    ));
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            material: materials.add(Color::srgb_u8(200, 14, 5)),
-            transform: Transform {
-                translation: Vec3::new(-2.0, 0.5, -2.0),
-                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
-                scale: Vec3::new(1.0, 1.0, 1.0),
-            },
-            ..default()
-        },
-    ));
-    commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-            material: materials.add(Color::srgb_u8(200, 14, 5)),
-            transform: Transform {
-                translation: Vec3::new(-2.0, 0.5, -2.0),
                 rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
                 scale: Vec3::new(1.0, 1.0, 1.0),
             },
@@ -353,26 +381,6 @@ fn extract_cameras(
     cameras: Extract<Res<Cameras>>, // Используем Extract для явного указания источника
 ) {
     commands.insert_resource(cameras.clone());
-}
-
-fn scene_update(
-    mut cube_query: Query<&mut Transform, With<Cube>>,
-    time: Res<Time>,
-) {
-    // Move the cube 
-    for mut transform in cube_query.iter_mut() {
-        let move_distance = 3.0;
-        let move_speed = 0.5;
-        let cycle_time = 2.0;
-        let relative_time = time.elapsed_seconds() * move_speed % cycle_time;
-
-        if relative_time < cycle_time / 2.0 {
-            transform.translation.x = move_distance * (relative_time - cycle_time / 4.0);
-        } else {
-            transform.translation.x =
-                move_distance * (cycle_time / 4.0 - (relative_time - cycle_time / 2.0));
-        }
-    }
 }
 
 /// Plugin for Render world part of work
@@ -795,7 +803,7 @@ fn encode_image_lz4(image_data: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Er
     Ok(compressed_data)
 }
 
-pub fn check_cameras(
+pub fn move_cameras(
     mut cameras_movement: ResMut<CamerasMovement>,
     cameras: ResMut<Cameras>,
     communication: ResMut<Communication>,
@@ -807,22 +815,50 @@ pub fn check_cameras(
 
     while let Ok((id, button)) = button_receiver.try_recv() {
         if let Some(client_idx) = clients.iter().position(|&client_id| client_id == id) {
-            if let Some(camera_entity) = cameras_entities.get(client_idx) {
-                
-                if let Ok(mut transform) = transforms.get_mut(*camera_entity) {
-                    let speed = 0.5;
+            let camera_entity = cameras_entities[client_idx];
+            let robot_entity = cameras.robots[client_idx];
+
+            // 1. Обрабатываем камеру
+            let (new_cam_transform, camera_offset) = {
+                if let Ok(mut cam_transform) = transforms.get_mut(camera_entity) {
+                    let speed = 0.02;
+                    let rotation_speed = 0.01;
                     
-                    // Вычисляем направления ДО изменения transform
-                    let right = transform.right();
-                    let forward = transform.forward();
+                    let old_rotation = cam_transform.rotation;
+                    let old_position = cam_transform.translation;
+
+                    // Двигаем камеру
+                    let forward = old_rotation * Vec3::NEG_Z;
+                    let right = old_rotation * Vec3::X;
+
                     match button.as_str() {
-                        "Left" => transform.translation -= right * speed,
-                        "Right" => transform.translation += right * speed,
-                        "Up" => transform.translation += forward * speed,
-                        "Down" => transform.translation -= forward * speed,
+                        "A" => cam_transform.translation -= right * speed,
+                        "D" => cam_transform.translation += right * speed,
+                        "W" => cam_transform.translation += forward * speed,
+                        "S" => cam_transform.translation -= forward * speed,
+                        "Q" => cam_transform.rotate_y(rotation_speed),
+                        "E" => cam_transform.rotate_y(-rotation_speed),
                         _ => (),
                     }
+
+                    // Сохраняем новые параметры камеры и смещение
+                    (
+                        (cam_transform.translation, cam_transform.rotation),
+                        Vec3::new(0.0, -0.2, 2.0)
+                    )
+                } else {
+                    continue;
                 }
+            };
+
+            // 2. Обрабатываем робота после завершения работы с камерой
+            if let Ok(mut robot_transform) = transforms.get_mut(robot_entity) {
+                let (cam_translation, cam_rotation) = new_cam_transform;
+                robot_transform.translation = cam_translation + 
+                    cam_rotation * camera_offset;
+                robot_transform.rotation = Quat::from_rotation_y(
+                    cam_rotation.to_euler(EulerRot::YXZ).0 - std::f32::consts::FRAC_PI_2
+                );
             }
         }
     }

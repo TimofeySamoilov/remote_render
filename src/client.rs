@@ -184,7 +184,7 @@ impl ScreenApp {
                             }
                         }
 
-                        tokio::time::sleep(Duration::from_millis(2)).await;
+                        //tokio::time::sleep(Duration::from_millis(2)).await;
                     }
                 }
                 Err(e) => {
